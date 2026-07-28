@@ -1,0 +1,42 @@
+## Build
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+
+## Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.rsuser
+
+## Local publish / packages (not for git)
+Publish/
+**/cdn-launcher/
+**/LauncherPackages/
+**/download_cache/
+*.7z
+*.zip
+
+## Secrets — never commit real credentials
+**/secrets.*
+.env
+.env.*
+*.local.bat
+*.local.ps1
+Upload-CDN.local.bat
+
+## Runtime junk
+*.log
+launcher.log
+local_version.txt
+repair_report.txt
+app_icon.ico
+
+## OS
+Thumbs.db
+Desktop.ini
+.DS_Store
