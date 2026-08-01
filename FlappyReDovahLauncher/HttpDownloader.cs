@@ -39,7 +39,7 @@ namespace FlappyReDovahLauncher
             };
             var c = new HttpClient(handler);
             c.Timeout = TimeSpan.FromHours(6);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("FlappyReDovah/1.0");
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("FlappyLauncher/0.0.4");
             c.DefaultRequestHeaders.ConnectionClose = false;
             return c;
         }
@@ -101,15 +101,30 @@ namespace FlappyReDovahLauncher
             Action<long, long> onProgress,
             CancellationToken cancel)
         {
-            string path;
             bool keep;
-            AcquirePackage(urlOrPath, dest, expectedSize, expectedSha256, onProgress, cancel, out path, out keep);
+            AcquirePackage(urlOrPath, dest, expectedSize, expectedSha256, onProgress, cancel, out keep);
         }
 
         /// <summary>
-        /// Get a verified package path. For local torrent bundles: use file in-place (no double-copy).
-        /// fromLocalBundle=true means caller must NOT delete the path after extract.
+        /// Prefer optional localPath (torrent), else download httpUrl to cacheDest.
+        /// fromLocalBundle=true → do not delete path after extract.
         /// </summary>
+        public static string AcquirePackage(
+            string localPathOrNull,
+            string httpUrl,
+            string cacheDest,
+            long expectedSize,
+            string expectedSha256,
+            Action<long, long> onProgress,
+            CancellationToken cancel,
+            out bool fromLocalBundle)
+        {
+            string path;
+            AcquirePackageCore(localPathOrNull, httpUrl, cacheDest, expectedSize, expectedSha256, onProgress, cancel, out path, out fromLocalBundle);
+            return path;
+        }
+
+        /// <summary>Backward-compatible single-source acquire (local path or HTTP url).</summary>
         public static string AcquirePackage(
             string urlOrPath,
             string cacheDest,
@@ -119,13 +134,14 @@ namespace FlappyReDovahLauncher
             CancellationToken cancel,
             out bool fromLocalBundle)
         {
-            string path;
-            AcquirePackage(urlOrPath, cacheDest, expectedSize, expectedSha256, onProgress, cancel, out path, out fromLocalBundle);
-            return path;
+            if (IsHttp(urlOrPath))
+                return AcquirePackage(null, urlOrPath, cacheDest, expectedSize, expectedSha256, onProgress, cancel, out fromLocalBundle);
+            return AcquirePackage(urlOrPath, null, cacheDest, expectedSize, expectedSha256, onProgress, cancel, out fromLocalBundle);
         }
 
-        private static void AcquirePackage(
-            string urlOrPath,
+        private static void AcquirePackageCore(
+            string localPathOrNull,
+            string httpUrl,
             string cacheDest,
             long expectedSize,
             string expectedSha256,
@@ -138,26 +154,37 @@ namespace FlappyReDovahLauncher
             fromLocalBundle = false;
             resultPath = cacheDest;
 
-            // Local file (torrent / offline): verify in place — do not copy into download_cache
-            if (!IsHttp(urlOrPath))
+            // 1) Local torrent / offline copy (fast path) — same unit as CDN would serve
+            if (!string.IsNullOrWhiteSpace(localPathOrNull) && File.Exists(localPathOrNull))
             {
-                string src = ToLocalPath(urlOrPath);
-                if (File.Exists(src))
+                try
                 {
-                    long len = new FileInfo(src).Length;
+                    long len = new FileInfo(localPathOrNull).Length;
                     onProgress?.Invoke(0, expectedSize > 0 ? expectedSize : len);
-                    VerifyPackageFile(src, expectedSize, expectedSha256, skipFullSha: true, cancel);
+                    VerifyPackageFile(localPathOrNull, expectedSize, expectedSha256, skipFullSha: true, cancel);
                     onProgress?.Invoke(len, expectedSize > 0 ? expectedSize : len);
-                    resultPath = src;
+                    resultPath = localPathOrNull;
                     fromLocalBundle = true;
-                    LauncherLog.Info("Local package ready: " + Path.GetFileName(src));
+                    LauncherLog.Info("Local package ready: " + Path.GetFileName(localPathOrNull));
                     return;
                 }
-                throw new FlappyException("Package not found on disk:\n" + src);
+                catch (Exception ex)
+                {
+                    LauncherLog.Warn("Local package unusable, will try CDN: " + Path.GetFileName(localPathOrNull) + " — " + ex.Message);
+                    // fall through to HTTP
+                }
+            }
+
+            // 2) CDN / HTTP (Repair, Update, missing torrent files, pure online install)
+            if (string.IsNullOrWhiteSpace(httpUrl) || !IsHttp(httpUrl))
+            {
+                if (!string.IsNullOrWhiteSpace(localPathOrNull) && !File.Exists(localPathOrNull))
+                    throw new FlappyException("Package not found locally and no CDN URL:\n" + localPathOrNull);
+                throw new FlappyException("Package URL is missing or invalid.");
             }
 
             Directory.CreateDirectory(Path.GetDirectoryName(cacheDest) ?? ".");
-            DownloadHttp(urlOrPath, cacheDest, expectedSize, onProgress, cancel);
+            DownloadHttp(httpUrl, cacheDest, expectedSize, onProgress, cancel);
             cancel.ThrowIfCancellationRequested();
             VerifyPackageFile(cacheDest, expectedSize, expectedSha256, skipFullSha: false, cancel);
             resultPath = cacheDest;
@@ -431,6 +458,35 @@ namespace FlappyReDovahLauncher
                 }
                 sha.TransformFinalBlock(new byte[0], 0, 0);
                 return BitConverter.ToString(sha.Hash).Replace("-", "").ToLowerInvariant();
+            }
+        }
+
+        /// <summary>Simple full-file download (tools, small assets). Overwrites dest.</summary>
+        public static void DownloadSimple(string url, string dest, CancellationToken cancel)
+        {
+            if (string.IsNullOrEmpty(url) || string.IsNullOrEmpty(dest))
+                throw new ArgumentException("url/dest required");
+            string dir = Path.GetDirectoryName(dest);
+            if (!string.IsNullOrEmpty(dir))
+                Directory.CreateDirectory(dir);
+
+            using (var req = new HttpRequestMessage(HttpMethod.Get, url))
+            using (var resp = Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel).GetAwaiter().GetResult())
+            {
+                if (!resp.IsSuccessStatusCode)
+                    throw new FlappyException(
+                        "Download failed (" + (int)resp.StatusCode + " " + resp.StatusCode + "):\n" + url);
+                using (var net = resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult())
+                using (var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.SequentialScan))
+                {
+                    byte[] buffer = new byte[64 * 1024];
+                    int read;
+                    while ((read = net.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        cancel.ThrowIfCancellationRequested();
+                        file.Write(buffer, 0, read);
+                    }
+                }
             }
         }
     }

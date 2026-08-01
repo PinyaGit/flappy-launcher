@@ -12,7 +12,7 @@ namespace FlappyReDovahLauncher
         public ChannelSelectForm()
         {
             Selected = InstallChannel.AeAndVr;
-            Text = "Flappy Re-Dovah";
+            Text = Constants.LAUNCHER_NAME;
             FlappyTheme.ApplyDialog(this);
             ClientSize = new Size(440, 290);
 

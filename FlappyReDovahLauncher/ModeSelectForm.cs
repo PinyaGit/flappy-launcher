@@ -15,7 +15,7 @@ namespace FlappyReDovahLauncher
         public ModeSelectForm(string lastMode = "AE")
         {
             SelectedMode = null;
-            Text = "Flappy Re-Dovah";
+            Text = Constants.LAUNCHER_NAME;
             FlappyTheme.ApplyDialog(this);
             ClientSize = new Size(420, 270);
 

@@ -1,42 +1,30 @@
-## Build
+# Build
 bin/
 obj/
 [Dd]ebug/
 [Rr]elease/
-x64/
-x86/
-
-## Visual Studio
-.vs/
 *.user
 *.suo
 *.userosscache
-*.rsuser
+*.sln.docstates
+.vs/
 
-## Local publish / packages (not for git)
+# Publish / packages (not source)
 Publish/
-**/cdn-launcher/
-**/LauncherPackages/
 **/download_cache/
 *.7z
-*.zip
+*.pdb
+launcher.log
 
-## Secrets — never commit real credentials
-**/secrets.*
-.env
-.env.*
+# Local secrets (never commit)
 *.local.bat
 *.local.ps1
-Upload-CDN.local.bat
+config.local.bat
+secrets/
+Upload-Launcher-CDN.local.bat
 
-## Runtime junk
-*.log
-launcher.log
-local_version.txt
-repair_report.txt
-app_icon.ico
-
-## OS
+# OS / IDE
 Thumbs.db
 Desktop.ini
-.DS_Store
+.idea/
+*.DotSettings.user

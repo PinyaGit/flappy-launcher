@@ -7,7 +7,7 @@
     <ProjectGuid>{FC42614E-0B3E-43F4-A3D7-C778DDE64175}</ProjectGuid>
     <OutputType>WinExe</OutputType>
     <RootNamespace>FlappyReDovahLauncher</RootNamespace>
-    <AssemblyName>Flappy Re-Dovah</AssemblyName>
+    <AssemblyName>Flappy Launcher</AssemblyName>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
@@ -51,6 +51,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="Constants.cs" />
+    <Compile Include="GameCatalog.cs" />
     <Compile Include="ChannelSelectForm.cs" />
     <Compile Include="FlappyException.cs" />
     <Compile Include="FlappyTheme.cs" />
@@ -59,6 +60,7 @@
     <Compile Include="LauncherSelfUpdate.cs" />
     <Compile Include="PackageModels.cs" />
     <Compile Include="PackageInstaller.cs" />
+    <Compile Include="SevenZipBootstrap.cs" />
     <Compile Include="ModeSelectForm.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -102,16 +104,22 @@
     </None>
   </ItemGroup>
   <ItemGroup>
+    <!-- App / taskbar icon only (not shipped as loose file; embedded via ApplicationIcon) -->
     <Content Include="favicon.ico" />
   </ItemGroup>
   <ItemGroup>
+    <!-- UI chrome -->
     <None Include="Resources\bg_LBackground.png" />
-    <None Include="Resources\icon_discord.png" />
-    <None Include="Resources\icon_boosty.png" />
     <None Include="Resources\edge_bar_fill.png" />
     <None Include="Resources\edge_bar_frame.png" />
     <None Include="Resources\edge_bar_track.png" />
     <None Include="Resources\cross.png" />
+    <!-- Library + social logos: edit these, rebuild → embedded in exe -->
+    <None Include="Assets\re-logo.png" />
+    <None Include="Assets\ru-logo.png" />
+    <None Include="Assets\en-logo.png" />
+    <None Include="Assets\discord.png" />
+    <None Include="Assets\boosty.png" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

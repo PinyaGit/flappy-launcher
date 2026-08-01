@@ -25,7 +25,7 @@ namespace FlappyReDovahLauncher
 
         public static string GameRootPath
         {
-            get { return Path.Combine(Constants.DESTINATION_PATH); }
+            get { return GameCatalog.InstallRoot; }
         }
 
         public static string InstallFlagPath
@@ -50,29 +50,44 @@ namespace FlappyReDovahLauncher
 
         public static string LocalVersionPath
         {
-            get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "local_version.txt"); }
+            get { return GameCatalog.LocalVersionPath; }
         }
 
         public static string DownloadCacheDir
         {
-            get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "download_cache"); }
+            get { return GameCatalog.DownloadCacheDir; }
         }
 
         public static string RepairReportPath
         {
-            get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "repair_report.txt"); }
+            get
+            {
+                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "repair_report_" + GameCatalog.Current.Id + ".txt");
+            }
         }
 
+        /// <summary>progress(overall0-100, currentArchive0-100 or -1, statusText)</summary>
+        public delegate void ProgressHandler(int overallPct, int currentPct, string message);
+
+        /// <summary>Resolved 7-Zip CLI (LocalAppData cache / Program Files / optional legacy next to exe).</summary>
         public static string SevenZipPath
         {
             get
             {
-                string nextToExe = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "7za.exe");
-                if (File.Exists(nextToExe)) return nextToExe;
-                string prog = @"C:\Program Files\7-Zip\7z.exe";
-                if (File.Exists(prog)) return prog;
-                return nextToExe;
+                return SevenZipBootstrap.ResolvedPath
+                    ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "7za.exe");
             }
+        }
+
+        /// <summary>Download official 7-Zip tools if missing. Safe to call repeatedly.</summary>
+        public static string EnsureSevenZip(ProgressHandler progress, CancellationToken cancel)
+        {
+            return SevenZipBootstrap.Ensure(
+                msg =>
+                {
+                    if (progress != null) progress(0, -1, msg ?? "7-Zip…");
+                },
+                cancel);
         }
 
         public static bool IsInstalled()
@@ -86,21 +101,54 @@ namespace FlappyReDovahLauncher
 
         public static Index FetchIndex()
         {
+            // Same index for online and torrent installs: prefer CDN, fall back to local bundle offline.
+            Exception cdnError = null;
             try
             {
                 string json = HttpDownloader.ReadAllText(Constants.INDEX_URL);
-                var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-                var idx = ser.Deserialize<Index>(json);
-                if (idx == null || idx.units == null)
-                    throw new FlappyException("index.json is empty or invalid.");
-                LauncherLog.Info("Index v" + idx.version + " units=" + idx.units.Count);
+                var idx = DeserializeIndex(json);
+                LauncherLog.Info("Index from CDN v" + idx.version + " units=" + idx.units.Count);
                 return idx;
             }
-            catch (FlappyException) { throw; }
             catch (Exception ex)
             {
-                throw new FlappyException("Cannot read package index.\n\nCheck CDN / network.", ex.ToString(), ex);
+                cdnError = ex;
+                LauncherLog.Warn("CDN index failed: " + ex.Message);
             }
+
+            string localIndex = Constants.LOCAL_INDEX_PATH;
+            if (!string.IsNullOrEmpty(localIndex) && File.Exists(localIndex))
+            {
+                try
+                {
+                    string json = File.ReadAllText(localIndex, Encoding.UTF8);
+                    var idx = DeserializeIndex(json);
+                    LauncherLog.Info("Index from LOCAL bundle v" + idx.version + " units=" + idx.units.Count);
+                    return idx;
+                }
+                catch (Exception ex)
+                {
+                    throw new FlappyException(
+                        "Cannot read package index from CDN or local bundle.\n\nCDN: " +
+                        FlappyException.FormatForUser(cdnError) + "\nLocal: " + ex.Message,
+                        ex.ToString(), ex);
+                }
+            }
+
+            throw new FlappyException(
+                "Cannot read package index.\n\nCheck CDN / network" +
+                (cdnError != null ? ":\n" + FlappyException.FormatForUser(cdnError) : "."),
+                cdnError != null ? cdnError.ToString() : null,
+                cdnError);
+        }
+
+        private static Index DeserializeIndex(string json)
+        {
+            var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            var idx = ser.Deserialize<Index>(json);
+            if (idx == null || idx.units == null)
+                throw new FlappyException("index.json is empty or invalid.");
+            return idx;
         }
 
         public static Version ParseVersion(string v)
@@ -113,13 +161,31 @@ namespace FlappyReDovahLauncher
 
         public static Version GetLocalVersion()
         {
-            if (!File.Exists(LocalVersionPath)) return new Version(0, 0, 0, 0);
-            return ParseVersion(File.ReadAllText(LocalVersionPath, Encoding.UTF8));
+            if (File.Exists(LocalVersionPath))
+                return ParseVersion(File.ReadAllText(LocalVersionPath, Encoding.UTF8));
+            // Pre multi-game: single local_version.txt next to exe
+            if (string.Equals(GameCatalog.Current.Id, "re-dovah", StringComparison.OrdinalIgnoreCase))
+            {
+                string legacy = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "local_version.txt");
+                if (File.Exists(legacy))
+                    return ParseVersion(File.ReadAllText(legacy, Encoding.UTF8));
+            }
+            return new Version(0, 0, 0, 0);
         }
 
         public static void SaveLocalVersion(string version)
         {
-            File.WriteAllText(LocalVersionPath, (version ?? "1.0.0").Trim(), Encoding.UTF8);
+            string v = (version ?? "1.0.0").Trim();
+            File.WriteAllText(LocalVersionPath, v, Encoding.UTF8);
+            if (string.Equals(GameCatalog.Current.Id, "re-dovah", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    string legacy = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "local_version.txt");
+                    File.WriteAllText(legacy, v, Encoding.UTF8);
+                }
+                catch { }
+            }
         }
 
         public static InstallChannel GetSavedChannel()
@@ -198,15 +264,18 @@ namespace FlappyReDovahLauncher
         /// <summary>Upgrade AE-only install: download missing VR packages and switch channel to AE+VR.</summary>
         public static void InstallVrChannel(
             Index index,
-            Action<int, string> progress,
+            ProgressHandler progress,
             CancellationToken cancel)
         {
             if (index == null || index.units == null)
                 throw new FlappyException("index.json has no packages.");
 
-            if (!File.Exists(SevenZipPath))
+            EnsureSevenZip(progress, cancel);
+            if (string.IsNullOrEmpty(SevenZipPath) || !File.Exists(SevenZipPath))
                 throw new FlappyException(
-                    "7za.exe not found next to the launcher.\n\nCopy 7za.exe (and 7za.dll if needed) beside Flappy Re-Dovah.exe.");
+                    "7-Zip is not available.\n\n" +
+                    "The launcher downloads it from https://www.7-zip.org/ on first install.\n" +
+                    "Check your network, or install 7-Zip system-wide.");
 
             Directory.CreateDirectory(GameRootPath);
             Directory.CreateDirectory(DownloadCacheDir);
@@ -215,19 +284,19 @@ namespace FlappyReDovahLauncher
             var vrUnits = GetVrUnits(index.units);
             if (vrUnits.Count == 0)
             {
-                progress(100, "No VR packages in index.");
+                progress(100, -1, "No VR packages in index.");
                 return;
             }
 
             // Only scan VR units (do not re-fingerprint the whole AE set).
-            progress(1, "Checking VR packages…");
+            progress(1, -1, "Checking VR packages…");
             var work = new List<PackageUnit>();
             for (int i = 0; i < vrUnits.Count; i++)
             {
                 cancel.ThrowIfCancellationRequested();
                 var unit = vrUnits[i];
                 if (progress != null)
-                    progress(1, string.Format("Checking VR {0}/{1}:\n{2}", i + 1, vrUnits.Count, DisplayName(unit)));
+                    progress(1, -1, string.Format("Checking VR {0}/{1}:\n{2}", i + 1, vrUnits.Count, DisplayName(unit)));
 
                 if (IsUserDataUnit(unit))
                 {
@@ -244,7 +313,7 @@ namespace FlappyReDovahLauncher
             {
                 FinishInstallFlag(index.version, "Get VR ok (already present)");
                 SaveLocalVersion(index.version ?? "1.0.0");
-                progress(100, "VR packages already present.\nChannel: AE + VR");
+                progress(100, -1, "VR packages already present.\nChannel: AE + VR");
                 return;
             }
 
@@ -269,7 +338,7 @@ namespace FlappyReDovahLauncher
         /// <summary>Remove VR packages from disk and switch channel back to AE-only.</summary>
         public static void RemoveVrChannel(
             Index index,
-            Action<int, string> progress,
+            ProgressHandler progress,
             CancellationToken cancel)
         {
             if (!IsInstalled())
@@ -291,7 +360,7 @@ namespace FlappyReDovahLauncher
                 cancel.ThrowIfCancellationRequested();
                 i++;
                 string name = DisplayName(unit);
-                progress(ClampPct(i * 90.0 / Math.Max(1, total)), "Removing VR:\n" + name);
+                progress(ClampPct(i * 90.0 / Math.Max(1, total)), -1, "Removing VR:\n" + name);
                 if (!IsRootUnit(unit))
                     WipeUnitDestination(unit);
             }
@@ -301,7 +370,7 @@ namespace FlappyReDovahLauncher
                 cancel.ThrowIfCancellationRequested();
                 i++;
                 string dest = Path.Combine(GameRootPath, rel);
-                progress(ClampPct(i * 90.0 / Math.Max(1, total)), "Removing VR:\n" + rel);
+                progress(ClampPct(i * 90.0 / Math.Max(1, total)), -1, "Removing VR:\n" + rel);
                 if (Directory.Exists(dest))
                 {
                     try { Directory.Delete(dest, true); }
@@ -335,7 +404,7 @@ namespace FlappyReDovahLauncher
             if (string.Equals(GetSavedMode(), "VR", StringComparison.OrdinalIgnoreCase))
                 SaveMode("AE");
 
-            progress(100, "VR removed.\nChannel: AE only");
+            progress(100, -1, "VR removed.\nChannel: AE only");
             LauncherLog.Info("Remove VR done, channel=AE");
         }
 
@@ -375,7 +444,7 @@ namespace FlappyReDovahLauncher
             }
         }
 
-        public static void InstallAll(Index index, Action<int, string> progress, CancellationToken cancel, InstallChannel channel)
+        public static void InstallAll(Index index, ProgressHandler progress, CancellationToken cancel, InstallChannel channel)
         {
             bool update = IsInstalled();
             InstallOrRepair(index, progress, cancel,
@@ -385,7 +454,7 @@ namespace FlappyReDovahLauncher
                 jobName: update ? "Update" : "Install");
         }
 
-        public static void RepairAll(Index index, Action<int, string> progress, CancellationToken cancel, InstallChannel channel)
+        public static void RepairAll(Index index, ProgressHandler progress, CancellationToken cancel, InstallChannel channel)
         {
             InstallOrRepair(index, progress, cancel,
                 onlyMismatched: true,
@@ -430,7 +499,7 @@ namespace FlappyReDovahLauncher
             try
             {
                 var sb = new StringBuilder();
-                sb.AppendLine("Flappy Re-Dovah repair report");
+                sb.AppendLine(Constants.LAUNCHER_NAME + " repair report — " + GameCatalog.Current.Title);
                 sb.AppendLine(DateTime.Now.ToString("o"));
                 sb.AppendLine(note ?? "");
                 sb.AppendLine("Scoped units: " + (scoped != null ? scoped.Count : 0));
@@ -584,7 +653,7 @@ namespace FlappyReDovahLauncher
 
         public static void InstallOrRepair(
             Index index,
-            Action<int, string> progress,
+            ProgressHandler progress,
             CancellationToken cancel,
             bool onlyMismatched,
             bool wipeMismatched,
@@ -594,9 +663,12 @@ namespace FlappyReDovahLauncher
             if (index == null || index.units == null || index.units.Count == 0)
                 throw new FlappyException("index.json has no packages.");
 
-            if (!File.Exists(SevenZipPath))
+            EnsureSevenZip(progress, cancel);
+            if (string.IsNullOrEmpty(SevenZipPath) || !File.Exists(SevenZipPath))
                 throw new FlappyException(
-                    "7za.exe not found next to the launcher.\n\nCopy 7za.exe (and 7za.dll if needed) beside Flappy Re-Dovah.exe.");
+                    "7-Zip is not available.\n\n" +
+                    "The launcher downloads it from https://www.7-zip.org/ on first install.\n" +
+                    "Check your network, or install 7-Zip system-wide.");
 
             Directory.CreateDirectory(GameRootPath);
             Directory.CreateDirectory(DownloadCacheDir);
@@ -609,8 +681,8 @@ namespace FlappyReDovahLauncher
             int skipped = 0;
             if (onlyMismatched)
             {
-                progress(0, "Checking fingerprints…\nPlease wait");
-                work = FindUnitsNeedingRepair(index, channel, msg => progress(1, "Checking…\n" + msg), cancel);
+                progress(0, -1, "Checking fingerprints…\nPlease wait");
+                work = FindUnitsNeedingRepair(index, channel, msg => progress(1, -1, "Checking…\n" + msg), cancel);
                 skipped = scoped.Count - work.Count;
                 WriteRepairReport(work, scoped, jobName + " scan");
             }
@@ -624,7 +696,7 @@ namespace FlappyReDovahLauncher
                 FinishInstallFlag(index.version, jobName + " ok skipped=" + skipped);
                 SaveLocalVersion(index.version ?? "1.0.0");
                 try { RestoreModOrder(); } catch (Exception ex) { LauncherLog.Warn("modlist: " + ex.Message); }
-                progress(100, jobName + " complete.\nAll packages OK (" + skipped + ")");
+                progress(100, -1, jobName + " complete.\nAll packages OK (" + skipped + ")");
                 return;
             }
 
@@ -651,9 +723,10 @@ namespace FlappyReDovahLauncher
             int workers = Math.Max(1, Math.Min(Constants.DOWNLOAD_PARALLELISM, work.Count));
             var workerTasks = new Task[workers];
 
-            progress(2, localBundle
-                ? ("Preparing " + work.Count + " local package(s)\nTorrent / offline · starting…")
+            progress(2, -1, localBundle
+                ? ("Packages: " + work.Count + "\nLocal prefer + CDN fallback · starting…")
                 : ("Downloading " + work.Count + " package(s)\n" + Constants.DOWNLOAD_PARALLELISM + " workers · starting…"));
+
             Action reportUi = () =>
             {
                 long now = Environment.TickCount;
@@ -674,11 +747,10 @@ namespace FlappyReDovahLauncher
                     finished = doneDl;
                     double dt = Math.Max(0.2, (now - tick0) / 1000.0);
                     double instant = bytes / dt;
-                    // EMA: react to speed but don't collapse to 0 on short gaps
                     if (speedEma <= 0) speedEma = instant;
                     else speedEma = speedEma * 0.65 + instant * 0.35;
                     if (instant < speedEma * 0.05 && finished < total)
-                        speedEma = speedEma * 0.92; // gentle decay only
+                        speedEma = speedEma * 0.92;
                     ema = speedEma;
                 }
 
@@ -696,10 +768,16 @@ namespace FlappyReDovahLauncher
                 if (activeN > 0) activeFrac /= activeN;
                 double pct = 2 + (finished + activeFrac) / Math.Max(1.0, total) * 83.0;
                 if (pct > 85) pct = 85;
-                string status = localBundle
-                    ? FormatLocalStatus(finished, total, slots.Values)
-                    : FormatDownloadStatus(finished, total, ema, slots.Values);
-                progress(ClampPct(pct), status);
+                // Current archive %: largest active download (or 100 if idle between files)
+                int curPct = -1;
+                double best = -1;
+                foreach (var s in slots.Values)
+                {
+                    if (s == null || s.Total <= 0) continue;
+                    double f = Math.Min(1.0, (double)s.Received / s.Total);
+                    if (f > best) { best = f; curPct = ClampPct(f * 100.0); }
+                }
+                progress(ClampPct(pct), curPct, FormatDownloadStatus(finished, total, ema, slots.Values));
             };
 
             for (int w = 0; w < workers; w++)
@@ -715,7 +793,9 @@ namespace FlappyReDovahLauncher
                         string id = u.id ?? shortName;
                         try
                         {
-                            string url = HttpDownloader.CombineUrl(Constants.PACKAGES_BASE_URL, u.package);
+                            // Per-game CDN folder + optional local torrent file for same relative path
+                            string cdnUrl = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, u.package);
+                            string localPath = GameCatalog.GetLocalPackagePath(u.package);
                             string cachePath = Path.Combine(DownloadCacheDir, id + ".7z");
 
                             var slot = new DlSlot { Name = shortName, Total = u.packageSize > 0 ? u.packageSize : -1 };
@@ -724,7 +804,8 @@ namespace FlappyReDovahLauncher
 
                             bool fromLocal;
                             string local = HttpDownloader.AcquirePackage(
-                                url,
+                                localPath,
+                                cdnUrl,
                                 cachePath,
                                 u.packageSize,
                                 u.packageSha256,
@@ -749,7 +830,7 @@ namespace FlappyReDovahLauncher
                             if (fromLocal) keepSource[id] = 0;
                             Interlocked.Increment(ref doneDl);
                             reportUi();
-                            LauncherLog.Info((fromLocal ? "Local " : "Downloaded ") + name);
+                            LauncherLog.Info((fromLocal ? "Local " : "CDN ") + name);
                         }
                         catch (Exception ex)
                         {
@@ -790,13 +871,14 @@ namespace FlappyReDovahLauncher
 
                 if (wipeMismatched && onlyMismatched && !IsUserDataUnit(unit))
                 {
-                    progress(ClampPct(basePct), "Clearing:\n" + name);
+                    progress(ClampPct(basePct), -1, "Clearing:\n" + name);
                     WipeUnitDestination(unit);
                 }
 
                 string dest = ResolveExtractDir(unit);
                 Directory.CreateDirectory(dest);
-                progress(ClampPct(basePct + 5.0 / total), "Extracting " + i + "/" + total + ":\n" + name);
+                int extractCur = ClampPct(100.0 * i / Math.Max(1, total));
+                progress(ClampPct(basePct + 5.0 / total), extractCur, "Extracting " + i + "/" + total + ":\n" + name);
                 Extract7z(local, dest);
                 // Never delete torrent/offline package files; only purge download_cache copies
                 string idKey = unit.id ?? ShortName(name);
@@ -817,14 +899,15 @@ namespace FlappyReDovahLauncher
 
             FinishInstallFlag(index.version, jobName + " fixed=" + total + " skipped=" + skipped);
             SaveLocalVersion(index.version ?? "1.0.0");
-            progress(100, jobName + " complete.\n" + total + " package(s)");
+            progress(100, -1, jobName + " complete.\n" + total + " package(s)");
             LauncherLog.Info(jobName + " done fixed=" + total + " skipped=" + skipped);
         }
 
         private static void FinishInstallFlag(string version, string note)
         {
             File.WriteAllText(InstallFlagPath,
-                "Flappy Re-Dovah installed" + Environment.NewLine +
+                GameCatalog.Current.Title + " installed" + Environment.NewLine +
+                "game=" + GameCatalog.Current.Id + Environment.NewLine +
                 "version=" + version + Environment.NewLine +
                 "date=" + DateTime.Now.ToString("o") + Environment.NewLine +
                 "note=" + note + Environment.NewLine,

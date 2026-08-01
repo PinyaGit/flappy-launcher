@@ -44,7 +44,7 @@ namespace FlappyReDovahLauncher
             this.Name = "Application";
             this.ShowInTaskbar = true;
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
-            this.Text = "Flappy Re-Dovah";
+            this.Text = "Flappy Launcher";
             this.Load += new System.EventHandler(this.OnLoadApplication);
             this.MouseDown += new System.Windows.Forms.MouseEventHandler(this.OnFormMouseDown);
             this.MouseMove += new System.Windows.Forms.MouseEventHandler(this.OnFormMouseMove);

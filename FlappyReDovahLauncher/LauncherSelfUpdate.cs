@@ -10,8 +10,8 @@ using System.Windows.Forms;
 namespace FlappyReDovahLauncher
 {
     /// <summary>
-    /// Self-update for the launcher exe (not the modpack).
-    /// CDN: launcher/version.json + zip with exe/7za.
+    /// Self-update for Flappy Launcher (not a game/modpack).
+    /// CDN: launcher/version.json + Flappy-Launcher.zip (exe + config only).
     /// </summary>
     internal static class LauncherSelfUpdate
     {
@@ -45,8 +45,51 @@ namespace FlappyReDovahLauncher
             catch (Exception ex)
             {
                 LauncherLog.Error("Self-update failed (continuing)", ex);
-                // Soft fail — do not block launch
+                try
+                {
+                    MessageBox.Show(
+                        "Launcher update failed.\n\n" +
+                        FlappyException.FormatForUser(ex) + "\n\n" +
+                        "You can keep using this version, or download the latest zip from:\n" +
+                        Constants.LAUNCHER_PACKAGE_URL + "\n" +
+                        "and replace " + Constants.LAUNCHER_EXE_NAME + " (game folders stay).",
+                        Constants.LAUNCHER_NAME + " — Update failed",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                }
+                catch { /* no UI */ }
                 return false;
+            }
+        }
+
+        /// <summary>Download + optional size/sha for launcher ZIP (not game 7z packages).</summary>
+        private static void DownloadLauncherZip(string url, string dest, LauncherVersionManifest man)
+        {
+            var cancel = System.Threading.CancellationToken.None;
+            HttpDownloader.DownloadSimple(url, dest, cancel);
+
+            long len = new FileInfo(dest).Length;
+            if (man != null && man.size > 0)
+            {
+                long diff = Math.Abs(len - man.size);
+                if (diff > 64 * 1024)
+                    throw new FlappyException(
+                        "Launcher package size mismatch.\nExpected " + man.size +
+                        " bytes, got " + len + ".");
+            }
+
+            if (man != null && !string.IsNullOrWhiteSpace(man.sha256))
+            {
+                string actual = HttpDownloader.ComputeFileSha256(dest, cancel);
+                if (!string.Equals(actual, man.sha256.Trim(), StringComparison.OrdinalIgnoreCase))
+                {
+                    try { File.Delete(dest); } catch { }
+                    throw new FlappyException(
+                        "Launcher package checksum failed.\n\n" +
+                        "CDN zip may be corrupt or version.json sha256 is stale.\n" +
+                        "Re-upload " + Constants.LAUNCHER_PACKAGE_NAME + " + version.json together.");
+                }
+                LauncherLog.Info("Self-update SHA256 OK");
             }
         }
 
@@ -59,8 +102,6 @@ namespace FlappyReDovahLauncher
             string json;
             try
             {
-                // Short timeout path: use HttpDownloader which shares HttpClient (long timeout).
-                // Prefer a dedicated quick check — still OK for local LAN/CDN.
                 json = HttpDownloader.ReadAllText(jsonUrl);
             }
             catch (Exception ex)
@@ -103,11 +144,11 @@ namespace FlappyReDovahLauncher
             if (!mandatory)
             {
                 var r = MessageBox.Show(
-                    "A new launcher version is available.\n\n" +
+                    "A new " + Constants.LAUNCHER_NAME + " version is available.\n\n" +
                     "Installed:  " + FormatVer(local) + "\n" +
                     "Available:  " + FormatVer(remote) + notes + "\n\n" +
-                    "Update now?\n(Game install folder will not be deleted.)",
-                    "Flappy Re-Dovah — Update",
+                    "Update now?\n(Game install folders will not be deleted.)",
+                    Constants.LAUNCHER_NAME + " — Update",
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Information);
                 if (r != DialogResult.Yes)
@@ -119,10 +160,10 @@ namespace FlappyReDovahLauncher
             else
             {
                 MessageBox.Show(
-                    "A required launcher update will be installed.\n\n" +
+                    "A required " + Constants.LAUNCHER_NAME + " update will be installed.\n\n" +
                     "Installed:  " + FormatVer(local) + "\n" +
                     "Available:  " + FormatVer(remote) + notes,
-                    "Flappy Re-Dovah — Required update",
+                    Constants.LAUNCHER_NAME + " — Required update",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
             }
@@ -142,38 +183,29 @@ namespace FlappyReDovahLauncher
             {
                 Cursor.Current = Cursors.WaitCursor;
                 LauncherLog.Info("Self-update download " + zipUrl);
-                HttpDownloader.Download(
-                    zipUrl,
-                    zipPath,
-                    man.size > 0 ? man.size : 0,
-                    man.sha256,
-                    null,
-                    System.Threading.CancellationToken.None);
+
+                // Do NOT use HttpDownloader.Download — that path requires 7z magic (game packs).
+                DownloadLauncherZip(zipUrl, zipPath, man);
 
                 if (!File.Exists(zipPath) || new FileInfo(zipPath).Length < 100)
                     throw new FlappyException("Downloaded launcher package is empty.");
 
                 ZipFile.ExtractToDirectory(zipPath, extractDir);
 
-                // Accept zip with files at root OR single top-level folder
                 string payload = ResolvePayloadRoot(extractDir);
-                string localExeName = Path.GetFileName(
-                    System.Windows.Forms.Application.ExecutablePath);
-                if (!File.Exists(Path.Combine(payload, "Flappy Re-Dovah.exe")) &&
-                    !File.Exists(Path.Combine(payload, localExeName)))
+                if (!PayloadHasLauncherExe(payload))
                 {
-                    string[] exes = Directory.GetFiles(payload, "*.exe", SearchOption.TopDirectoryOnly);
-                    if (exes.Length == 0)
-                        throw new FlappyException(
-                            "Launcher package has no .exe in the root.\n\nCheck the zip on CDN.");
+                    throw new FlappyException(
+                        "Launcher package has no launcher .exe in the root.\n\nCheck the zip on CDN.");
                 }
 
+                // Prefer new product name; fall back to whatever is running / legacy.
+                string startExe = PickStartExeName(payload);
                 string batPath = Path.Combine(workRoot, "apply_update.bat");
-                string exeName = localExeName;
                 int pid = Process.GetCurrentProcess().Id;
-                WriteApplyScript(batPath, pid, payload, baseDir, exeName);
+                WriteApplyScript(batPath, pid, payload, baseDir, startExe);
 
-                LauncherLog.Info("Self-update applying via " + batPath);
+                LauncherLog.Info("Self-update applying via " + batPath + " → " + startExe);
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = batPath,
@@ -183,7 +215,7 @@ namespace FlappyReDovahLauncher
                     CreateNoWindow = true
                 });
 
-                return true; // exit so files can be replaced
+                return true;
             }
             finally
             {
@@ -191,19 +223,38 @@ namespace FlappyReDovahLauncher
             }
         }
 
+        private static bool PayloadHasLauncherExe(string payload)
+        {
+            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME))) return true;
+            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME_LEGACY))) return true;
+            string[] exes = Directory.GetFiles(payload, "*.exe", SearchOption.TopDirectoryOnly);
+            return exes.Length > 0;
+        }
+
+        private static string PickStartExeName(string payload)
+        {
+            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME)))
+                return Constants.LAUNCHER_EXE_NAME;
+            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME_LEGACY)))
+                return Constants.LAUNCHER_EXE_NAME_LEGACY;
+            string running = Path.GetFileName(System.Windows.Forms.Application.ExecutablePath);
+            if (File.Exists(Path.Combine(payload, running)))
+                return running;
+            string[] exes = Directory.GetFiles(payload, "*.exe", SearchOption.TopDirectoryOnly);
+            if (exes.Length > 0)
+                return Path.GetFileName(exes[0]);
+            return Constants.LAUNCHER_EXE_NAME;
+        }
+
         private static string ResolvePayloadRoot(string extractDir)
         {
-            // Prefer directory that contains Flappy Re-Dovah.exe
-            string direct = Path.Combine(extractDir, "Flappy Re-Dovah.exe");
-            if (File.Exists(direct)) return extractDir;
+            if (PayloadHasLauncherExe(extractDir)) return extractDir;
 
             string[] dirs = Directory.GetDirectories(extractDir);
             foreach (var d in dirs)
             {
-                if (File.Exists(Path.Combine(d, "Flappy Re-Dovah.exe")))
-                    return d;
+                if (PayloadHasLauncherExe(d)) return d;
             }
-            // single nested folder without exact name
             if (dirs.Length == 1)
             {
                 string[] exes = Directory.GetFiles(dirs[0], "*.exe", SearchOption.TopDirectoryOnly);
@@ -214,8 +265,8 @@ namespace FlappyReDovahLauncher
 
         private static void WriteApplyScript(string batPath, int pid, string src, string dst, string exeName)
         {
-            // Wait for launcher PID to exit, copy files, restart, cleanup.
-            // Does NOT touch Flappy Re-Dovah\ game folder (only overwrites files present in payload).
+            // Wait for launcher PID to exit, copy payload files, start new exe, cleanup.
+            // Does NOT delete game install folders (only overwrites files present in the zip).
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
             sb.AppendLine("setlocal EnableExtensions");
@@ -223,6 +274,7 @@ namespace FlappyReDovahLauncher
             sb.AppendLine("set \"SRC=" + src.TrimEnd('\\') + "\"");
             sb.AppendLine("set \"DST=" + dst.TrimEnd('\\') + "\"");
             sb.AppendLine("set \"EXE=" + exeName + "\"");
+            sb.AppendLine("set \"LEGACY=" + Constants.LAUNCHER_EXE_NAME_LEGACY + "\"");
             sb.AppendLine("set /a TRIES=0");
             sb.AppendLine(":wait");
             sb.AppendLine("set /a TRIES+=1");
@@ -234,15 +286,18 @@ namespace FlappyReDovahLauncher
             sb.AppendLine(")");
             sb.AppendLine(":copy");
             sb.AppendLine("ping -n 2 127.0.0.1 >nul");
-            // Copy only files from payload into launcher dir (no delete of game install)
-            sb.AppendLine("xcopy /Y /Q /I \"%SRC%\\*\" \"%DST%\\\" >nul");
+            sb.AppendLine("robocopy \"%SRC%\" \"%DST%\" /E /IS /IT /R:5 /W:1 /NFL /NDL /NJH /NJS /nc /ns /np >nul");
+            sb.AppendLine("if not exist \"%DST%\\%EXE%\" (");
+            sb.AppendLine("  xcopy /Y /Q /I \"%SRC%\\*\" \"%DST%\\\" >nul");
+            sb.AppendLine(")");
+            // Drop legacy product name after migrate to Flappy Launcher.exe
+            sb.AppendLine("if /I not \"%EXE%\"==\"%LEGACY%\" if exist \"%DST%\\%LEGACY%\" del /f /q \"%DST%\\%LEGACY%\" 2>nul");
             sb.AppendLine("if exist \"%DST%\\%EXE%\" (");
             sb.AppendLine("  start \"\" \"%DST%\\%EXE%\" " + SkipArg);
             sb.AppendLine(") else (");
             sb.AppendLine("  start \"\" explorer \"%DST%\"");
             sb.AppendLine(")");
-            // Clean temp work root (parent of SRC)
-            sb.AppendLine("ping -n 2 127.0.0.1 >nul");
+            sb.AppendLine("ping -n 3 127.0.0.1 >nul");
             sb.AppendLine("rd /s /q \"%~dp0\" 2>nul");
             File.WriteAllText(batPath, sb.ToString(), Encoding.ASCII);
         }
@@ -256,13 +311,13 @@ namespace FlappyReDovahLauncher
         private static string ResolvePackageUrl(string urlOrRelative)
         {
             if (string.IsNullOrWhiteSpace(urlOrRelative))
-                return Constants.CombineBase("launcher/Flappy-Re-Dovah-Launcher.zip");
+                return Constants.LAUNCHER_PACKAGE_URL;
             urlOrRelative = urlOrRelative.Trim();
             if (urlOrRelative.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
                 urlOrRelative.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
                 urlOrRelative.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
                 return urlOrRelative;
-            return Constants.CombineBase(urlOrRelative);
+            return Constants.CombineCdn(urlOrRelative);
         }
 
         public static Version GetLocalVersion()
@@ -288,7 +343,6 @@ namespace FlappyReDovahLauncher
         private static string NormalizeVersion(string v)
         {
             v = (v ?? "").Trim();
-            // allow "1.0.1" or "1.0.1.0"
             var parts = v.Split('.');
             if (parts.Length == 1) return v + ".0.0.0";
             if (parts.Length == 2) return v + ".0.0";
@@ -309,7 +363,7 @@ namespace FlappyReDovahLauncher
     internal sealed class LauncherVersionManifest
     {
         public string version { get; set; }
-        /// <summary>Relative to PACKAGES_BASE_URL or absolute URL.</summary>
+        /// <summary>Relative to CDN root or absolute URL.</summary>
         public string url { get; set; }
         public string sha256 { get; set; }
         public long size { get; set; }

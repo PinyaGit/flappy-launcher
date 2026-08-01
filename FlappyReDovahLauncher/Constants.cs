@@ -3,123 +3,120 @@ using System.IO;
 
 namespace FlappyReDovahLauncher
 {
-    /// <summary>App configuration (not a Form).</summary>
+    /// <summary>
+    /// App-wide launcher identity + CDN. Per-game paths live in <see cref="GameCatalog"/>.
+    /// This is a multi-game library launcher — not bound to a single title version.
+    /// </summary>
     internal static class Constants
     {
-        public static readonly string GAME_TITLE = "Flappy Re-Dovah";
-        public static readonly string LAUNCHER_NAME = "Flappy Re-Dovah";
+        /// <summary>Product name shown in UI / window title.</summary>
+        public static readonly string LAUNCHER_NAME = "Flappy Launcher";
 
-        public static readonly string DESTINATION_PATH = Path.Combine(
-            AppDomain.CurrentDomain.BaseDirectory,
-            "Flappy Re-Dovah");
+        /// <summary>Primary executable file name (shipped in CDN zip).</summary>
+        public const string LAUNCHER_EXE_NAME = "Flappy Launcher.exe";
 
-        /// <summary>Online CDN (used when no local torrent bundle next to the exe).</summary>
+        /// <summary>Legacy exe from Re-Dovah-only builds (self-update migration).</summary>
+        public const string LAUNCHER_EXE_NAME_LEGACY = "Flappy Re-Dovah.exe";
+
+        /// <summary>CDN zip file name under launcher/.</summary>
+        public const string LAUNCHER_PACKAGE_NAME = "Flappy-Launcher.zip";
+
+        /// <summary>Online CDN root (per-game folders hang under this).</summary>
         public const string CDN_PACKAGES_BASE_URL = "https://cdn.flappy.su/";
 
-        private static string _packagesBaseResolved;
-        private static bool _packagesBaseResolvedDone;
+        // ---------- back-compat aliases (current game) ----------
 
-        /// <summary>
-        /// Package root: local folder (torrent / offline) if index.json+packages exist next to exe,
-        /// otherwise CDN. Local mode = install from disk without re-downloading.
-        /// </summary>
+        public static string GAME_TITLE
+        {
+            get { return GameCatalog.Current.Title; }
+        }
+
+        public static string DESTINATION_PATH
+        {
+            get { return GameCatalog.InstallRoot; }
+        }
+
         public static string PACKAGES_BASE_URL
         {
-            get
-            {
-                if (!_packagesBaseResolvedDone)
-                {
-                    _packagesBaseResolved = ResolvePackagesBase();
-                    _packagesBaseResolvedDone = true;
-                }
-                return _packagesBaseResolved;
-            }
+            get { return GameCatalog.PackagesBaseUrl; }
+        }
+
+        public static bool HasLocalPackageBundle
+        {
+            get { return !string.IsNullOrEmpty(GameCatalog.LocalBundleDirectory); }
         }
 
         public static bool IsLocalPackagesMode
         {
-            get
-            {
-                string b = PACKAGES_BASE_URL ?? "";
-                return !(b.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                         || b.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
-                         || b.StartsWith("file:", StringComparison.OrdinalIgnoreCase));
-            }
+            get { return HasLocalPackageBundle; }
+        }
+
+        public static string LocalBundleDirectory
+        {
+            get { return GameCatalog.LocalBundleDirectory; }
         }
 
         public static string INDEX_URL
         {
-            get { return CombineBase("index.json"); }
+            get { return GameCatalog.IndexUrl; }
+        }
+
+        public static string LOCAL_INDEX_PATH
+        {
+            get
+            {
+                string b = GameCatalog.LocalBundleDirectory;
+                return string.IsNullOrEmpty(b) ? null : Path.Combine(b, "index.json");
+            }
         }
 
         public static string APPLICATION_ICON_URL
         {
-            get { return CombineBase("favicon.ico"); }
+            get { return CombineCdn("favicon.ico"); }
         }
 
-        /// <summary>Launcher self-update manifest on CDN (online only).</summary>
+        /// <summary>Launcher self-update manifest (shared, not per-game).</summary>
         public static string LAUNCHER_VERSION_URL
         {
-            get { return CDN_PACKAGES_BASE_URL.TrimEnd('/') + "/launcher/version.json"; }
+            get { return CombineCdn("launcher/version.json"); }
         }
 
-        public static readonly string GAME_EXECUTABLE_PATH = Path.Combine(DESTINATION_PATH, "ModOrganizer.exe");
+        public static string LAUNCHER_PACKAGE_URL
+        {
+            get { return CombineCdn("launcher/" + LAUNCHER_PACKAGE_NAME); }
+        }
+
+        public static string GAME_EXECUTABLE_PATH
+        {
+            get { return Path.Combine(DESTINATION_PATH, "ModOrganizer.exe"); }
+        }
 
         public static readonly string BOOSTY_URL = "https://boosty.to/flappyae";
         public static readonly string DISCORD_URL = "https://discord.com/invite/XqPmTqSyqF";
 
         public static bool SHOW_VERSION_TEXT = true;
-
-        /// <summary>If true, start Install/Update automatically when not ready.</summary>
         public static bool AUTOMATICALLY_BEGIN_UPDATING = false;
-
         public static bool AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING = false;
+        public static bool CHECK_LAUNCHER_UPDATES = true;
 
-        /// <summary>Self-update only when using online CDN (not torrent offline bundle).</summary>
-        public static bool CHECK_LAUNCHER_UPDATES
-        {
-            get { return !IsLocalPackagesMode; }
-        }
-
-        /// <summary>Parallel package acquires (HTTP downloads or local verify).</summary>
-        public static int DOWNLOAD_PARALLELISM = 3;
-
+        /// <summary>Parallel package downloads. 1 = sequential (matches single "current file" progress bar).</summary>
+        public static int DOWNLOAD_PARALLELISM = 1;
         public static long DOWNLOAD_CHUNK_BYTES = 800L * 1024 * 1024;
 
-        private static string ResolvePackagesBase()
+        public static string GetLocalPackagePath(string packageRelative)
         {
-            try
-            {
-                string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                // Torrent layout: index.json + packages\ next to Flappy Re-Dovah.exe
-                string indexBeside = Path.Combine(baseDir, "index.json");
-                string packagesBeside = Path.Combine(baseDir, "packages");
-                if (File.Exists(indexBeside) && Directory.Exists(packagesBeside))
-                {
-                    LauncherLog.Info("Packages mode: LOCAL torrent bundle @ " + baseDir);
-                    return Path.GetFullPath(baseDir);
-                }
-            }
-            catch (Exception ex)
-            {
-                try { LauncherLog.Warn("ResolvePackagesBase: " + ex.Message); } catch { }
-            }
+            return GameCatalog.GetLocalPackagePath(packageRelative);
+        }
 
-            LauncherLog.Info("Packages mode: CDN " + CDN_PACKAGES_BASE_URL);
-            return CDN_PACKAGES_BASE_URL;
+        public static string CombineCdn(string relative)
+        {
+            relative = (relative ?? "").Replace('\\', '/').TrimStart('/');
+            return CDN_PACKAGES_BASE_URL.TrimEnd('/') + "/" + relative;
         }
 
         public static string CombineBase(string relative)
         {
-            string b = PACKAGES_BASE_URL ?? "";
-            relative = (relative ?? "").Replace('\\', '/').TrimStart('/');
-            if (b.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                b.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-                b.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
-            {
-                return b.TrimEnd('/') + "/" + relative;
-            }
-            return Path.Combine(b.TrimEnd('\\', '/'), relative.Replace('/', Path.DirectorySeparatorChar));
+            return GameCatalog.CombinePackages(relative);
         }
     }
 }
