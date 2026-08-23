@@ -13,13 +13,15 @@ namespace FlappyReDovahLauncher
         public string Id { get; set; }
         public string Title { get; set; }
         public string ShortLabel { get; set; }
-        /// <summary>CDN folder under base URL, e.g. "re-dovah" → https://cdn…/re-dovah/</summary>
+        /// <summary>CDN folder under base URL, e.g. "flappy" → https://cdn…/flappy/</summary>
         public string CdnFolder { get; set; }
         /// <summary>Install directory name next to the launcher exe.</summary>
         public string InstallFolderName { get; set; }
-        /// <summary>Optional splash override (file path). Null = default resource.</summary>
+        /// <summary>Optional splash override (loose file path). Null = use <see cref="SplashResource"/>.</summary>
         public string SplashPath { get; set; }
-        /// <summary>Embedded rail icon resource name (Assets → Resources.resx), e.g. re_logo.</summary>
+        /// <summary>Embedded splash resource (Resources.resx), e.g. bg_re_dovah / bg_flappy_400.</summary>
+        public string SplashResource { get; set; }
+        /// <summary>Embedded rail icon resource, e.g. logo_re_dovah / logo_flappy_400.</summary>
         public string IconResource { get; set; }
         /// <summary>False = stub / coming soon (UI only).</summary>
         public bool Available { get; set; }
@@ -34,6 +36,22 @@ namespace FlappyReDovahLauncher
             try
             {
                 return Resources.ResourceManager.GetObject(IconResource) as Bitmap;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        /// <summary>Load embedded splash (caller owns the returned Bitmap clone).</summary>
+        public Bitmap GetSplashBitmapClone()
+        {
+            if (string.IsNullOrEmpty(SplashResource)) return null;
+            try
+            {
+                var src = Resources.ResourceManager.GetObject(SplashResource) as Bitmap;
+                if (src == null) return null;
+                return new Bitmap(src);
             }
             catch
             {
@@ -80,11 +98,7 @@ namespace FlappyReDovahLauncher
 
         private static List<GameDefinition> BuildList()
         {
-            // Stub splash for games without art yet (optional file next to exe)
-            string stubSplash = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "black.png");
-            if (!File.Exists(stubSplash))
-                stubSplash = null;
-
+            // Two library entries: Re-Dovah branch + Flappy 4.0.0 branch (RU/EN unified).
             return new List<GameDefinition>
             {
                 new GameDefinition
@@ -95,37 +109,24 @@ namespace FlappyReDovahLauncher
                     // Empty = CDN root (current live layout). Later: "re-dovah"
                     CdnFolder = "",
                     InstallFolderName = "Flappy Re-Dovah",
-                    SplashPath = null, // default bg_LBackground
-                    IconResource = "re_logo",
+                    SplashResource = "bg_re_dovah",
+                    IconResource = "logo_re_dovah",
                     Available = true,
                     SupportsVr = true,
                     Description = "Skyrim AE + VR modpack"
                 },
                 new GameDefinition
                 {
-                    Id = "flappy-ru",
-                    Title = "FlappyRU",
-                    ShortLabel = "RU",
-                    CdnFolder = "flappy-ru",
-                    InstallFolderName = "FlappyRU",
-                    SplashPath = stubSplash,
-                    IconResource = "ru_logo",
-                    Available = false, // stub until packaged
+                    Id = "flappy",
+                    Title = "Flappy",
+                    ShortLabel = "Flappy",
+                    CdnFolder = "flappy",
+                    InstallFolderName = "Flappy",
+                    SplashResource = "bg_flappy_400",
+                    IconResource = "logo_flappy_400",
+                    Available = false, // stub until 4.0.0 packages on CDN
                     SupportsVr = false,
-                    Description = "Coming soon — Russian build"
-                },
-                new GameDefinition
-                {
-                    Id = "flappy-en",
-                    Title = "FlappyEN",
-                    ShortLabel = "EN",
-                    CdnFolder = "flappy-en",
-                    InstallFolderName = "FlappyEN",
-                    SplashPath = stubSplash,
-                    IconResource = "en_logo",
-                    Available = false,
-                    SupportsVr = false,
-                    Description = "Coming soon — English build"
+                    Description = "Coming soon — Flappy 4.0.0"
                 }
             };
         }
@@ -178,7 +179,6 @@ namespace FlappyReDovahLauncher
             get
             {
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                // Preferred: next to exe under game folder name or cdn folder
                 string[] candidates =
                 {
                     Path.Combine(baseDir, Current.CdnFolder ?? ""),

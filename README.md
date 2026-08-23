@@ -1,136 +1,27 @@
-# ⚠️ NSFW / content warning (please read, then laugh, then read again)
+﻿# Flappy Launcher
 
-Running this launcher **may** cause:
-
-- mild-to-severe **discomfort**
-- sudden **aversion to vanilla Skyrim**
-- **nausea** (disk space graphs, progress bars, or the modlist)
-- an unexplained urge to install *just one more* optional separator
-- social consequences if someone walks in while the splash art is full-screen
-
-This is a **multi-game Flappy library launcher**. Packs can include adult-oriented content depending on what the maintainers ship.  
-If that is not your cup of mead: **close the window, go outside, touch grass, respect your limits.**  
-If it is: welcome. Stay hydrated. Use Repair if reality desyncs.
-
----
-
-# Flappy Launcher
-
-Source for **Flappy Launcher** — a multi-game desktop library (Re-Dovah, FlappyRU, FlappyEN, …), published mainly for **transparency**: so players can see what runs on their PC when they install or update a pack.
+Multi-game library launcher (**Re-Dovah** + **Flappy 4.0.0**).
 
 | | |
 |--|--|
-| **Product** | Flappy Launcher |
 | **Exe** | `Flappy Launcher.exe` |
-| **Version (this tree)** | **0.0.4** (launcher only — not a game version) |
-| **CDN zip** | `launcher/Flappy-Launcher.zip` |
-| **Manifest** | `launcher/version.json` |
+| **Version** | **0.0.5** |
+| **CDN** | `https://cdn.flappy.su/` |
+| **Package** | `launcher/Flappy-Launcher.zip` |
 
-This is **not** a full game dump and **not** the mod archives. It is the installer/UI that:
+## Highlights (0.0.5)
 
-- shows a Steam-style **game rail** (multiple titles)
-- reads each game’s `index.json` from the CDN (or a local torrent bundle)
-- downloads/verifies multi-package `.7z` units
-- downloads **7-Zip Extra** from [7-zip.org](https://www.7-zip.org/) on first extract (not shipped next to the exe)
-- supports **AE only** vs **AE+VR** where a title supports it
-- Update / Repair by fingerprint
-- Play via Mod Organizer 2 custom executables
-- launcher self-update (`launcher/version.json`)
-
-Built on ideas from Universal Game Launcher (Teemu Sillanpää, MIT), heavily adapted for Flappy.
-
-## Player FAQ
-
-| Question | Answer |
-|----------|--------|
-| Why is the source public? | So you can audit what the exe does (network, files, elevation). |
-| Does this include the full modpack? | **No.** Packages live on the CDN / torrent, not in this repo. |
-| Can I build it myself? | Yes — see below. Prefer official builds when available. |
-| Does it phone home? | It talks to the configured CDN (`cdn.flappy.su` by default) for index/packages/optional self-update and opens community links you click. |
-
-## Requirements (build)
-
-- Windows 10/11  
-- Visual Studio with .NET desktop workload  
-- [.NET Framework 4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48)  
+- 3 parallel CDN download workers
+- Library: Re-Dovah (live) + Flappy (4.0.0 stub)
+- Per-game splash/logos (`bg_re_dovah`, `bg_flappy_400`, …)
+- Status text follows selected game
 
 ## Build
 
-1. Open `FlappyReDovahLauncher.sln`  
-2. Build **Release**  
-3. Output: `FlappyReDovahLauncher\bin\Release\Flappy Launcher.exe`  
+Open `FlappyReDovahLauncher.sln`, Release build → `bin\Release\Flappy Launcher.exe`
 
-Or:
-
-```powershell
-.\Publish-Launcher.ps1 -Version 0.0.4
-```
-
-### Ship folder (official package)
-
-```
-Flappy Launcher.exe
-Flappy Launcher.exe.config
-```
-
-Logos are **embedded**. 7-Zip tools are **downloaded** on first install/repair into `%LocalAppData%\FlappyLauncher\tools\7zip\`.
-
-Do **not** ship `bin/`, `obj/`, or game package trees in this git repo.
-
-## Assets (edit → rebuild)
-
-`FlappyReDovahLauncher/Assets/`:
-
-| File | Use |
-|------|-----|
-| `re-logo.png` | Re-Dovah rail icon |
-| `ru-logo.png` | FlappyRU |
-| `en-logo.png` | FlappyEN |
-| `discord.png` / `boosty.png` | Social buttons |
-
-Prefer **PNG 128×128 or 256×256**, square, transparent background.
-
-## Configuration
-
-Main knobs: `FlappyReDovahLauncher/Constants.cs`
-
-- Product name / exe / package names  
-- `CDN_PACKAGES_BASE_URL` (default `https://cdn.flappy.su/`)  
-- Discord / Boosty links  
-- Parallel download count, chunk size  
-
-Games are registered in `GameCatalog.cs` (id, CDN folder, install folder, VR flag, embedded logo resource).
-
-## CDN layout (not this repo)
-
-```
-https://cdn.flappy.su/
-  index.json                    # legacy Re-Dovah root (or per-game folders later)
-  packages/...
-  flappy-ru/ ...                # future per-game trees
-  flappy-en/ ...
-  launcher/version.json
-  launcher/Flappy-Launcher.zip
-```
-
-## Tools (maintainers)
-
-| File | Purpose |
-|------|---------|
-| `Publish-Launcher.ps1` | Build Release zip + `version.json` |
-| `Upload-Launcher-CDN.bat` | **Template only** — placeholders; use a private `*.local.bat` |
-
-## Security / privacy
-
-- **No real server passwords** belong in this repository.  
-- Online install needs network access to the CDN.  
-- First Skyrim path setup may request elevation once (registry `Installed Path`).  
-- Logs: `launcher.log` next to the exe (local unless you send them).
+Or: `.\Publish-Launcher.ps1 -Version 0.0.5`
 
 ## License
 
-See [LICENSE](LICENSE). Original Universal Game Launcher MIT notice is preserved for derived portions.
-
-## Disclaimer
-
-Provided as-is for the Flappy community. Modding can break saves, frames, and friendships. You accept responsibility for what you install. The NSFW warning at the top was only *half* joking.
+See [LICENSE](LICENSE).

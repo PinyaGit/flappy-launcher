@@ -108,16 +108,17 @@
     <Content Include="favicon.ico" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Splashes by branch/version -->
+    <None Include="Resources\bg_re_dovah.png" />
+    <None Include="Resources\bg_flappy_400.png" />
     <!-- UI chrome -->
-    <None Include="Resources\bg_LBackground.png" />
     <None Include="Resources\edge_bar_fill.png" />
     <None Include="Resources\edge_bar_frame.png" />
     <None Include="Resources\edge_bar_track.png" />
     <None Include="Resources\cross.png" />
-    <!-- Library + social logos: edit these, rebuild → embedded in exe -->
-    <None Include="Assets\re-logo.png" />
-    <None Include="Assets\ru-logo.png" />
-    <None Include="Assets\en-logo.png" />
+    <!-- Rail logos: edit → rebuild embeds into exe -->
+    <None Include="Assets\logo_re_dovah.png" />
+    <None Include="Assets\logo_flappy_400.png" />
     <None Include="Assets\discord.png" />
     <None Include="Assets\boosty.png" />
   </ItemGroup>

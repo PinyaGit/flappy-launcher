@@ -124,6 +124,16 @@ namespace FlappyReDovahLauncher
 
         private void RefreshPlayState()
         {
+            if (!GameCatalog.Current.Available)
+            {
+                _isInstalled = false;
+                _playState = PlayButtonState.Install;
+                _playText = "Soon";
+                _showProgress = false;
+                _showReady = false;
+                return;
+            }
+
             _isInstalled = PackageInstaller.IsInstalled();
             var local = PackageInstaller.GetLocalVersion();
             _playState = PackageInstaller.ResolvePlayState(_isInstalled, local, OnlineVersion, _busy);
@@ -174,7 +184,8 @@ namespace FlappyReDovahLauncher
 
         private void LoadAssets()
         {
-            _defaultSplash = new Bitmap(Properties.Resources.bg_LBackground);
+            // Default splash = Re-Dovah branch art (also used as layout size reference)
+            _defaultSplash = new Bitmap(Properties.Resources.bg_re_dovah);
             if (_defaultSplash.PixelFormat != PixelFormat.Format32bppArgb)
             {
                 var converted = new Bitmap(_defaultSplash.Width, _defaultSplash.Height, PixelFormat.Format32bppArgb);
@@ -267,43 +278,66 @@ namespace FlappyReDovahLauncher
             return dst;
         }
 
+        private static Bitmap LoadSplashBitmapFromFile(string path)
+        {
+            var next = new Bitmap(path);
+            if (next.PixelFormat == PixelFormat.Format32bppArgb)
+                return next;
+            var c = new Bitmap(next.Width, next.Height, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(c))
+                g.DrawImage(next, 0, 0, next.Width, next.Height);
+            next.Dispose();
+            return c;
+        }
+
+        /// <summary>Keep window/layout size stable across branch posters.</summary>
+        private Bitmap NormalizeSplashSize(Bitmap next)
+        {
+            if (next == null) return null;
+            if (next.PixelFormat != PixelFormat.Format32bppArgb)
+            {
+                var c = new Bitmap(next.Width, next.Height, PixelFormat.Format32bppArgb);
+                using (var g = Graphics.FromImage(c))
+                    g.DrawImage(next, 0, 0, next.Width, next.Height);
+                next.Dispose();
+                next = c;
+            }
+            if (_defaultSplash != null &&
+                (next.Width != _defaultSplash.Width || next.Height != _defaultSplash.Height))
+            {
+                var scaled = new Bitmap(_defaultSplash.Width, _defaultSplash.Height, PixelFormat.Format32bppArgb);
+                using (var g = Graphics.FromImage(scaled))
+                {
+                    g.Clear(Color.FromArgb(255, 8, 8, 10));
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.DrawImage(next, 0, 0, scaled.Width, scaled.Height);
+                }
+                next.Dispose();
+                next = scaled;
+            }
+            return next;
+        }
+
         private void ApplyGameSplash(GameDefinition game)
         {
             Bitmap next = null;
             try
             {
+                // 1) Loose file override (dev)
                 if (game != null && !string.IsNullOrEmpty(game.SplashPath) && File.Exists(game.SplashPath))
-                {
-                    next = new Bitmap(game.SplashPath);
-                    if (next.PixelFormat != PixelFormat.Format32bppArgb)
-                    {
-                        var c = new Bitmap(next.Width, next.Height, PixelFormat.Format32bppArgb);
-                        using (var g = Graphics.FromImage(c))
-                            g.DrawImage(next, 0, 0, next.Width, next.Height);
-                        next.Dispose();
-                        next = c;
-                    }
-                    // Scale stub to default splash size so layout stays stable
-                    if (_defaultSplash != null &&
-                        (next.Width != _defaultSplash.Width || next.Height != _defaultSplash.Height))
-                    {
-                        var scaled = new Bitmap(_defaultSplash.Width, _defaultSplash.Height, PixelFormat.Format32bppArgb);
-                        using (var g = Graphics.FromImage(scaled))
-                        {
-                            g.Clear(Color.FromArgb(255, 8, 8, 10));
-                            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-                            g.DrawImage(next, 0, 0, scaled.Width, scaled.Height);
-                        }
-                        next.Dispose();
-                        next = scaled;
-                    }
-                }
+                    next = LoadSplashBitmapFromFile(game.SplashPath);
+                // 2) Embedded splash for this game branch/version
+                if (next == null && game != null)
+                    next = game.GetSplashBitmapClone();
             }
             catch (Exception ex)
             {
                 LauncherLog.Warn("splash: " + ex.Message);
                 if (next != null) { try { next.Dispose(); } catch { } next = null; }
             }
+
+            if (next != null)
+                next = NormalizeSplashSize(next);
 
             if (next == null && _defaultSplash != null)
                 next = (Bitmap)_defaultSplash.Clone();
@@ -532,13 +566,18 @@ namespace FlappyReDovahLauncher
                     _playText = "Soon";
                     _playState = PlayButtonState.Install;
                     _showProgress = false;
-                    _showReady = true;
+                    _showReady = false;
                     _statusText = game.Description ?? "Coming soon";
                     RefreshVersionText(indexError: true);
                     IsReady = false;
                     RedrawLayered(force: true);
                     return;
                 }
+
+                // Clear stub/previous-game status before CDN work
+                _statusText = "Checking…";
+                _showProgress = false;
+                _showReady = false;
 
                 _cachedIndex = PackageInstaller.FetchIndex();
                 OnlineVersion = PackageInstaller.ParseVersion(_cachedIndex.version);
@@ -547,8 +586,18 @@ namespace FlappyReDovahLauncher
 
                 _isInstalled = PackageInstaller.IsInstalled();
                 bool upToDate = _isInstalled && local >= OnlineVersion;
-                IsReady = upToDate;
                 RefreshPlayState();
+                if (upToDate)
+                {
+                    _statusText = "Ready to play";
+                    IsReady = true;
+                }
+                else
+                {
+                    _statusText = _isInstalled ? "Update available" : "Ready to install";
+                    IsReady = false;
+                    RedrawLayered(force: true);
+                }
 
                 bool autoInstall = !upToDate && (
                     Constants.AUTOMATICALLY_BEGIN_UPDATING ||
@@ -560,8 +609,6 @@ namespace FlappyReDovahLauncher
                         : "Auto-update enabled — starting");
                     StartPackageInstallAsync();
                 }
-                else
-                    RedrawLayered(force: true);
             }
             catch (Exception ex)
             {
@@ -757,9 +804,17 @@ namespace FlappyReDovahLauncher
             using (var brushStatus = new SolidBrush(EdgeCream))
             using (var brushVer = new SolidBrush(EdgeMute))
             {
-                string main = _showProgress
-                    ? (string.IsNullOrEmpty(_statusText) ? "Updating…" : _statusText)
-                    : (_showReady ? "Ready to play" : "");
+                string main;
+                if (_showProgress)
+                    main = string.IsNullOrEmpty(_statusText) ? "Updating…" : _statusText;
+                else if (!GameCatalog.Current.Available)
+                    main = string.IsNullOrEmpty(_statusText)
+                        ? (GameCatalog.Current.Description ?? "Coming soon")
+                        : _statusText;
+                else if (_showReady)
+                    main = "Ready to play";
+                else
+                    main = _statusText ?? "";
 
                 if (!string.IsNullOrEmpty(main))
                 {

@@ -99,8 +99,8 @@ namespace FlappyReDovahLauncher
         public static bool AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING = false;
         public static bool CHECK_LAUNCHER_UPDATES = true;
 
-        /// <summary>Parallel package downloads. 1 = sequential (matches single "current file" progress bar).</summary>
-        public static int DOWNLOAD_PARALLELISM = 1;
+        /// <summary>Parallel package downloads (CDN workers). Current bar still tracks one file at a time.</summary>
+        public static int DOWNLOAD_PARALLELISM = 3;
         public static long DOWNLOAD_CHUNK_BYTES = 800L * 1024 * 1024;
 
         public static string GetLocalPackagePath(string packageRelative)
