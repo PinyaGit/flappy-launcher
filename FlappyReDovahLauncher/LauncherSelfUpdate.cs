@@ -48,12 +48,11 @@ namespace FlappyReDovahLauncher
                 try
                 {
                     MessageBox.Show(
-                        "Launcher update failed.\n\n" +
-                        FlappyException.FormatForUser(ex) + "\n\n" +
-                        "You can keep using this version, or download the latest zip from:\n" +
-                        Constants.LAUNCHER_PACKAGE_URL + "\n" +
-                        "and replace " + Constants.LAUNCHER_EXE_NAME + " (game folders stay).",
-                        Constants.LAUNCHER_NAME + " — Update failed",
+                        Loc.F("self_fail",
+                            FlappyException.FormatForUser(ex),
+                            Constants.LAUNCHER_PACKAGE_URL,
+                            Constants.LAUNCHER_EXE_NAME),
+                        Loc.F("self_fail_title", Constants.LAUNCHER_NAME),
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Warning);
                 }
@@ -144,11 +143,8 @@ namespace FlappyReDovahLauncher
             if (!mandatory)
             {
                 var r = MessageBox.Show(
-                    "A new " + Constants.LAUNCHER_NAME + " version is available.\n\n" +
-                    "Installed:  " + FormatVer(local) + "\n" +
-                    "Available:  " + FormatVer(remote) + notes + "\n\n" +
-                    "Update now?\n(Game install folders will not be deleted.)",
-                    Constants.LAUNCHER_NAME + " — Update",
+                    Loc.F("self_ask", Constants.LAUNCHER_NAME, FormatVer(local), FormatVer(remote), notes),
+                    Loc.F("self_ask_title", Constants.LAUNCHER_NAME),
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Information);
                 if (r != DialogResult.Yes)
@@ -160,10 +156,8 @@ namespace FlappyReDovahLauncher
             else
             {
                 MessageBox.Show(
-                    "A required " + Constants.LAUNCHER_NAME + " update will be installed.\n\n" +
-                    "Installed:  " + FormatVer(local) + "\n" +
-                    "Available:  " + FormatVer(remote) + notes,
-                    Constants.LAUNCHER_NAME + " — Required update",
+                    Loc.F("self_req", Constants.LAUNCHER_NAME, FormatVer(local), FormatVer(remote), notes),
+                    Loc.F("self_req_title", Constants.LAUNCHER_NAME),
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
             }
@@ -206,6 +200,8 @@ namespace FlappyReDovahLauncher
                 WriteApplyScript(batPath, pid, payload, baseDir, startExe);
 
                 LauncherLog.Info("Self-update applying via " + batPath + " → " + startExe);
+                // Same launch as 0.0.5 (ShellExecute hidden .bat). cmd /c was unnecessary
+                // and the explorer fallback after a failed copy opened Documents.
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = batPath,
@@ -265,8 +261,8 @@ namespace FlappyReDovahLauncher
 
         private static void WriteApplyScript(string batPath, int pid, string src, string dst, string exeName)
         {
-            // Wait for launcher PID to exit, copy payload files, start new exe, cleanup.
-            // Does NOT delete game install folders (only overwrites files present in the zip).
+            // Same as 0.0.5: wait for PID, robocopy payload, start new exe, cleanup.
+            // Only change: never `explorer "%DST%"` — that opened Documents when copy missed.
             var sb = new StringBuilder();
             sb.AppendLine("@echo off");
             sb.AppendLine("setlocal EnableExtensions");
@@ -290,12 +286,13 @@ namespace FlappyReDovahLauncher
             sb.AppendLine("if not exist \"%DST%\\%EXE%\" (");
             sb.AppendLine("  xcopy /Y /Q /I \"%SRC%\\*\" \"%DST%\\\" >nul");
             sb.AppendLine(")");
-            // Drop legacy product name after migrate to Flappy Launcher.exe
             sb.AppendLine("if /I not \"%EXE%\"==\"%LEGACY%\" if exist \"%DST%\\%LEGACY%\" del /f /q \"%DST%\\%LEGACY%\" 2>nul");
             sb.AppendLine("if exist \"%DST%\\%EXE%\" (");
             sb.AppendLine("  start \"\" \"%DST%\\%EXE%\" " + SkipArg);
-            sb.AppendLine(") else (");
-            sb.AppendLine("  start \"\" explorer \"%DST%\"");
+            sb.AppendLine(") else if exist \"%DST%\\Flappy Launcher.exe\" (");
+            sb.AppendLine("  start \"\" \"%DST%\\Flappy Launcher.exe\" " + SkipArg);
+            sb.AppendLine(") else if exist \"%DST%\\%LEGACY%\" (");
+            sb.AppendLine("  start \"\" \"%DST%\\%LEGACY%\" " + SkipArg);
             sb.AppendLine(")");
             sb.AppendLine("ping -n 3 127.0.0.1 >nul");
             sb.AppendLine("rd /s /q \"%~dp0\" 2>nul");

@@ -22,7 +22,7 @@ Source for **Flappy Launcher** — a multi-game desktop library (**Re-Dovah**, *
 |--|--|
 | **Product** | Flappy Launcher |
 | **Exe** | `Flappy Launcher.exe` |
-| **Version (this tree)** | **0.0.5** (launcher only — not a game version) |
+| **Version (this tree)** | **0.0.9** (launcher only — not a game version) |
 | **CDN zip** | `launcher/Flappy-Launcher.zip` |
 | **Manifest** | `launcher/version.json` |
 
@@ -30,7 +30,7 @@ This is **not** a full game dump and **not** the mod archives. It is the install
 
 - shows a Steam-style **game rail** (multiple titles)
 - reads each game’s `index.json` from the CDN (or a local torrent bundle)
-- downloads/verifies multi-package `.7z` units (**up to 3 parallel** workers)
+- downloads/verifies multi-package `.7z` units (parallel workers, default 3)
 - downloads **7-Zip Extra** from [7-zip.org](https://www.7-zip.org/) on first extract (not shipped next to the exe)
 - supports **AE only** vs **AE+VR** where a title supports it
 - Update / Repair by fingerprint
@@ -63,7 +63,7 @@ Built on ideas from Universal Game Launcher (Teemu Sillanpää, MIT), heavily ad
 Or:
 
 ```powershell
-.\Publish-Launcher.ps1 -Version 0.0.5
+.\Publish-Launcher.ps1 -Version 0.0.9
 ```
 
 ### Ship folder (official package)
@@ -103,7 +103,7 @@ Main knobs: `FlappyReDovahLauncher/Constants.cs`
 - Product name / exe / package names  
 - `CDN_PACKAGES_BASE_URL` (default `https://cdn.flappy.su/`)  
 - Discord / Boosty links  
-- `DOWNLOAD_PARALLELISM` (default **3**)  
+- `DOWNLOAD_PARALLELISM` (default **3**, Settings can set 1–4)  
 
 Games are registered in `GameCatalog.cs` (id, CDN folder, install folder, VR flag, splash/logo resources).
 
@@ -131,6 +131,18 @@ https://cdn.flappy.su/
 - Online install needs network access to the CDN.  
 - First Skyrim path setup may request elevation once (registry `Installed Path`).  
 - Logs: `launcher.log` next to the exe (local unless you send them).
+
+## Versions
+
+Launcher app version only — not a game/modpack version.
+
+| | |
+|--|--|
+| **0.0.9** | Self-update still works from public **0.0.4** (extract the zip to a folder first — do not run the exe from inside 7-Zip/WinRAR). If the new exe starts from an unpack temp dir, it copies itself to `%LocalAppData%\FlappyLauncher\`. |
+| **0.0.8** | Self-update no longer opens Explorer / Documents when the apply script cannot start the new exe. |
+| **0.0.6** | Settings (gear): RU/EN, Repair, install/remove VR, bug report, uninstall this game, 1–4 download workers. Minimize to tray. Chrome buttons use `Resources/button.png`. |
+| **0.0.5** | Multi-game library (Re-Dovah + Flappy 4.0.0 stub). Up to 3 parallel package downloads. |
+| **0.0.4** | Product rebrand to **Flappy Launcher** (`Flappy Launcher.exe` + `launcher/Flappy-Launcher.zip`). |
 
 ## License
 

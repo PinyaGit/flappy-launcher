@@ -52,6 +52,10 @@
   <ItemGroup>
     <Compile Include="Constants.cs" />
     <Compile Include="GameCatalog.cs" />
+    <Compile Include="Loc.cs" />
+    <Compile Include="LauncherSettings.cs" />
+    <Compile Include="SettingsForm.cs" />
+    <Compile Include="BugReportPacker.cs" />
     <Compile Include="ChannelSelectForm.cs" />
     <Compile Include="FlappyException.cs" />
     <Compile Include="FlappyTheme.cs" />
@@ -116,6 +120,7 @@
     <None Include="Resources\edge_bar_frame.png" />
     <None Include="Resources\edge_bar_track.png" />
     <None Include="Resources\cross.png" />
+    <None Include="Resources\button.png" />
     <!-- Rail logos: edit → rebuild embeds into exe -->
     <None Include="Assets\logo_re_dovah.png" />
     <None Include="Assets\logo_flappy_400.png" />

@@ -18,7 +18,7 @@ namespace FlappyReDovahLauncher
 
             var title = new Label
             {
-                Text = "What to download?",
+                Text = Loc.T("channel_title"),
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI Semibold", 15f, FontStyle.Bold),
@@ -29,7 +29,7 @@ namespace FlappyReDovahLauncher
 
             var hint = new Label
             {
-                Text = "VR packs are large (StockGameVR + (VR) mods).\nYou can reinstall later with the full channel.",
+                Text = Loc.T("channel_hint"),
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 ForeColor = FlappyTheme.Mute,
@@ -37,15 +37,15 @@ namespace FlappyReDovahLauncher
                 Size = new Size(400, 48)
             };
 
-            var btnAe = FlappyTheme.MakeGoldButton("AE only\nSkyrim AE — no VR", new Point(30, 115), new Size(180, 100), primary: true);
-            var btnBoth = FlappyTheme.MakeGoldButton("AE + VR\nFull pack", new Point(230, 115), new Size(180, 100), primary: true);
+            var btnAe = FlappyTheme.MakeGoldButton(Loc.T("channel_ae"), new Point(30, 115), new Size(180, 100), primary: true);
+            var btnBoth = FlappyTheme.MakeGoldButton(Loc.T("channel_both"), new Point(230, 115), new Size(180, 100), primary: true);
             btnAe.Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
             btnBoth.Font = new Font("Segoe UI Semibold", 11f, FontStyle.Bold);
 
             btnAe.Click += (s, e) => { Selected = InstallChannel.AeOnly; DialogResult = DialogResult.OK; Close(); };
             btnBoth.Click += (s, e) => { Selected = InstallChannel.AeAndVr; DialogResult = DialogResult.OK; Close(); };
 
-            var cancel = FlappyTheme.MakeGoldButton("Cancel", new Point(155, 235), new Size(130, 34), primary: false);
+            var cancel = FlappyTheme.MakeGoldButton(Loc.T("cancel"), new Point(155, 235), new Size(130, 34), primary: false);
             cancel.DialogResult = DialogResult.Cancel;
             cancel.ForeColor = FlappyTheme.Mute;
             cancel.BackColor = FlappyTheme.CancelBack;

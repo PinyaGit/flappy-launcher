@@ -22,6 +22,7 @@ namespace FlappyReDovahLauncher
         private Bitmap _iconDiscord;
         private Bitmap _iconBoosty;
         private Bitmap _iconClose;
+        private Bitmap _iconChrome;
         private Bitmap _edgeBarFill;
         private Bitmap _edgeBarFrame;
         private Bitmap _edgeBarTrack;
@@ -50,14 +51,16 @@ namespace FlappyReDovahLauncher
         private bool _showReady = true;
 
         private Rectangle _rcPlay;
-        private Rectangle _rcRepair;
         private Rectangle _rcMo;
-        private Rectangle _rcVrChannel; // Get VR (AE-only) or Remove VR (AE+VR)
         private Rectangle _rcCancel;
         private Rectangle _rcDiscord;
         private Rectangle _rcBoosty;
         private Rectangle _rcClose;
+        private Rectangle _rcGear;
+        private Rectangle _rcTray;
         private Rectangle[] _rcGames; // left library rail
+        private NotifyIcon _tray;
+        private ContextMenuStrip _trayMenu;
 
         private CancellationTokenSource _jobCts;
 
@@ -76,7 +79,7 @@ namespace FlappyReDovahLauncher
                 RefreshPlayState();
                 if (value && !_busy)
                 {
-                    _statusText = GameCatalog.Current.Available ? "Ready to play" : (GameCatalog.Current.Description ?? "Coming soon");
+                    _statusText = GameCatalog.Current.Available ? Loc.T("ready") : Loc.GameBlurb(GameCatalog.Current);
                     _progressOverall = 0;
                     _progressCurrent = -1;
                     _showProgress = false;
@@ -86,35 +89,9 @@ namespace FlappyReDovahLauncher
             }
         }
 
-        private bool ShowRepairButton
-        {
-            get { return GameCatalog.Current.Available && _isInstalled && !_busy; }
-        }
-
         private bool ShowMoButton
         {
             get { return GameCatalog.Current.Available && _isInstalled && !_busy; }
-        }
-
-        /// <summary>Get VR when AE-only; Remove VR when full channel.</summary>
-        private bool ShowVrChannelButton
-        {
-            get
-            {
-                return GameCatalog.Current.Available
-                    && GameCatalog.Current.SupportsVr
-                    && _isInstalled && !_busy;
-            }
-        }
-
-        private string VrChannelButtonText
-        {
-            get
-            {
-                return PackageInstaller.GetSavedChannel() == InstallChannel.AeOnly
-                    ? "Get VR"
-                    : "Remove VR";
-            }
         }
 
         private bool ShowCancelButton
@@ -128,7 +105,7 @@ namespace FlappyReDovahLauncher
             {
                 _isInstalled = false;
                 _playState = PlayButtonState.Install;
-                _playText = "Soon";
+                _playText = Loc.T("soon");
                 _showProgress = false;
                 _showReady = false;
                 return;
@@ -139,10 +116,10 @@ namespace FlappyReDovahLauncher
             _playState = PackageInstaller.ResolvePlayState(_isInstalled, local, OnlineVersion, _busy);
             switch (_playState)
             {
-                case PlayButtonState.Install: _playText = "Install"; break;
-                case PlayButtonState.Update: _playText = "Update"; break;
+                case PlayButtonState.Install: _playText = Loc.T("install"); break;
+                case PlayButtonState.Update: _playText = Loc.T("update"); break;
                 case PlayButtonState.Busy: _playText = "…"; break;
-                default: _playText = "Play"; break;
+                default: _playText = Loc.T("play"); break;
             }
             _showProgress = _busy || _playState == PlayButtonState.Install || _playState == PlayButtonState.Update;
             if (_busy) _showReady = false;
@@ -165,7 +142,38 @@ namespace FlappyReDovahLauncher
             LoadAssets();
             ApplyGameSplash(GameCatalog.Current);
             LayoutHitRects();
+            InitTray();
             GameCatalog.CurrentChanged += OnGameCatalogChanged;
+            Loc.LanguageChanged += OnLanguageChanged;
+        }
+
+        private void OnLanguageChanged()
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(OnLanguageChanged));
+                return;
+            }
+            RefreshPlayState();
+            RefreshVersionText();
+            RebuildTrayMenu();
+            RefreshStatusText();
+            RedrawLayered(force: true);
+        }
+
+        /// <summary>Re-translate idle status after language change (progress text stays until next tick).</summary>
+        private void RefreshStatusText()
+        {
+            if (_busy) return;
+            if (!GameCatalog.Current.Available)
+                _statusText = Loc.GameBlurb(GameCatalog.Current);
+            else if (!_isInstalled || _playState == PlayButtonState.Install)
+                _statusText = Loc.T("ready_install");
+            else if (_playState == PlayButtonState.Update)
+                _statusText = Loc.T("update_available");
+            else
+                _statusText = Loc.T("ready");
         }
 
         private void OnGameCatalogChanged()
@@ -206,6 +214,12 @@ namespace FlappyReDovahLauncher
             catch
             {
                 _iconClose = LoadBitmapResource("cross", "cross.png");
+            }
+            try { _iconChrome = FlattenChromeButton(new Bitmap(Properties.Resources.chrome_btn)); }
+            catch
+            {
+                var raw = LoadBitmapResource("chrome_btn", "button.png");
+                _iconChrome = raw != null ? FlattenChromeButton(raw) : null;
             }
 
             _edgeBarFill = LoadBitmapResource("edge_bar_fill", "edge_bar_fill.png");
@@ -447,6 +461,32 @@ namespace FlappyReDovahLauncher
             return null;
         }
 
+        /// <summary>Composite button.png over a solid disc so chrome buttons are not see-through.</summary>
+        private static Bitmap FlattenChromeButton(Bitmap src)
+        {
+            if (src == null) return null;
+            try
+            {
+                var dst = new Bitmap(src.Width, src.Height, PixelFormat.Format32bppArgb);
+                using (var g = Graphics.FromImage(dst))
+                {
+                    g.Clear(Color.Transparent);
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.CompositingMode = CompositingMode.SourceOver;
+                    float m = src.Width * 0.07f;
+                    using (var br = new SolidBrush(Color.FromArgb(255, 16, 14, 18)))
+                        g.FillEllipse(br, m, m, src.Width - m * 2, src.Height - m * 2);
+                    g.DrawImage(src, 0, 0, src.Width, src.Height);
+                }
+                return dst;
+            }
+            finally
+            {
+                src.Dispose();
+            }
+        }
+
         /// <summary>Trim fully transparent margins so frame/track align with fill channel.</summary>
         private static Bitmap CropToOpaque(Bitmap src)
         {
@@ -482,9 +522,12 @@ namespace FlappyReDovahLauncher
             int w = ClientSize.Width;
             int h = ClientSize.Height;
 
-            // Close only (no minimize) — top-right
-            const int closeSize = 28;
+            // Top-right chrome: tray · gear · close (button.png round plate)
+            const int closeSize = 32;
+            const int chromeGap = 4;
             _rcClose = new Rectangle(w - 12 - closeSize, 12, closeSize, closeSize);
+            _rcGear = new Rectangle(_rcClose.X - chromeGap - closeSize, 12, closeSize, closeSize);
+            _rcTray = new Rectangle(_rcGear.X - chromeGap - closeSize, 12, closeSize, closeSize);
 
             // Social logos — bottom-left, stacked, no ring
             const int iconSize = 52;
@@ -506,22 +549,15 @@ namespace FlappyReDovahLauncher
                 _rcGames[i] = new Rectangle(iconPad, y, railTile, railTile + railLabel);
             }
 
-            // Footer (right column), bottom → top:
-            //   [ Play ]
-            //   [ Repair ]
-            //   [ Modding ]
-            //   [ Get VR / Remove VR ]
-            //   [ Cancel ] when busy
+            // Footer (right column): Play, Modding above it (Cancel replaces Modding while busy)
             const int playW = 128;
             const int playH = 44;
             const int smallH = 32;
             const int gap = 8;
             int leftCol = iconPad + iconSize + gap + 8;
             _rcPlay = new Rectangle(w - gap - playW, h - 14 - playH, playW, playH);
-            _rcRepair = new Rectangle(_rcPlay.X, _rcPlay.Top - gap - smallH, playW, smallH);
-            _rcMo = new Rectangle(_rcPlay.X, _rcRepair.Top - gap - smallH, playW, smallH);
-            _rcVrChannel = new Rectangle(_rcPlay.X, _rcMo.Top - gap - smallH, playW, smallH);
-            _rcCancel = new Rectangle(_rcPlay.X, _rcVrChannel.Top, playW, smallH);
+            _rcMo = new Rectangle(_rcPlay.X, _rcPlay.Top - gap - smallH, playW, smallH);
+            _rcCancel = _rcMo;
 
             // Dual progress: current archive (top) + overall (bottom), left of Play
             int barRight = _rcPlay.Left - gap;
@@ -533,7 +569,7 @@ namespace FlappyReDovahLauncher
             _rcProgressCurrent = new Rectangle(leftCol, barsTop, barW, barH);
             _rcProgressOverall = new Rectangle(leftCol, barsTop + barH + barGap, barW, barH);
 
-            const int statusH = 56;
+            const int statusH = 84;
             _rcStatus = new Rectangle(
                 leftCol,
                 Math.Max(8, _rcProgressCurrent.Top - 6 - statusH),
@@ -546,6 +582,17 @@ namespace FlappyReDovahLauncher
             Name = Constants.LAUNCHER_NAME;
             Text = Constants.LAUNCHER_NAME + " — " + GameCatalog.Current.Title;
             try { LoadApplicationIcon(); } catch { }
+            try
+            {
+                Visible = true;
+                NativeWinAPI.ShowWindow(Handle, NativeWinAPI.SW_RESTORE);
+                NativeWinAPI.ShowWindow(Handle, NativeWinAPI.SW_SHOW);
+            }
+            catch { }
+            if (_tray != null && Icon != null)
+            {
+                try { _tray.Icon = Icon; } catch { }
+            }
 
             RedrawLayered(force: true);
             InitializePackageMode();
@@ -563,11 +610,11 @@ namespace FlappyReDovahLauncher
                 if (!game.Available)
                 {
                     _isInstalled = false;
-                    _playText = "Soon";
+                    _playText = Loc.T("soon");
                     _playState = PlayButtonState.Install;
                     _showProgress = false;
                     _showReady = false;
-                    _statusText = game.Description ?? "Coming soon";
+                    _statusText = Loc.GameBlurb(game);
                     RefreshVersionText(indexError: true);
                     IsReady = false;
                     RedrawLayered(force: true);
@@ -575,7 +622,7 @@ namespace FlappyReDovahLauncher
                 }
 
                 // Clear stub/previous-game status before CDN work
-                _statusText = "Checking…";
+                _statusText = Loc.T("checking");
                 _showProgress = false;
                 _showReady = false;
 
@@ -589,12 +636,12 @@ namespace FlappyReDovahLauncher
                 RefreshPlayState();
                 if (upToDate)
                 {
-                    _statusText = "Ready to play";
+                    _statusText = Loc.T("ready");
                     IsReady = true;
                 }
                 else
                 {
-                    _statusText = _isInstalled ? "Update available" : "Ready to install";
+                    _statusText = _isInstalled ? Loc.T("update_available") : Loc.T("ready_install");
                     IsReady = false;
                     RedrawLayered(force: true);
                 }
@@ -630,29 +677,26 @@ namespace FlappyReDovahLauncher
             string launcher = FormatShortVersion(LauncherSelfUpdate.GetLocalVersion());
             if (indexError)
             {
-                _versionText = "Game —  ·  Launcher " + launcher;
+                _versionText = Loc.F("ver_game_dash", launcher);
                 return;
             }
 
             var localGame = PackageInstaller.GetLocalVersion();
             bool installed = PackageInstaller.IsInstalled();
-            string gamePart;
             if (!installed || localGame == null || localGame == new Version(0, 0, 0, 0))
             {
-                gamePart = OnlineVersion != null
-                    ? "Game " + FormatShortVersion(OnlineVersion) + " (not installed)"
-                    : "Game —";
+                _versionText = OnlineVersion != null
+                    ? Loc.F("ver_not_installed", FormatShortVersion(OnlineVersion), launcher)
+                    : Loc.F("ver_game_dash_only", launcher);
             }
             else if (OnlineVersion != null && localGame != OnlineVersion)
             {
-                gamePart = "Game " + FormatShortVersion(localGame) + " → " + FormatShortVersion(OnlineVersion);
+                _versionText = Loc.F("ver_upgrade", FormatShortVersion(localGame), FormatShortVersion(OnlineVersion), launcher);
             }
             else
             {
-                gamePart = "Game " + FormatShortVersion(localGame);
+                _versionText = Loc.F("ver_ok", FormatShortVersion(localGame), launcher);
             }
-
-            _versionText = gamePart + "  ·  Launcher " + launcher;
         }
 
         private static string FormatShortVersion(Version v)
@@ -753,17 +797,12 @@ namespace FlappyReDovahLauncher
 
                     DrawStatus(g, w, h);
                     if (ShowCancelButton)
-                        DrawEdgeButton(g, _rcCancel, "Cancel", 9.5f, muted: false);
-                    else if (GameCatalog.Current.Available)
-                    {
-                        if (ShowVrChannelButton)
-                            DrawEdgeButton(g, _rcVrChannel, VrChannelButtonText, 9.5f, muted: false);
-                        if (ShowMoButton)
-                            DrawEdgeButton(g, _rcMo, "Modding", 9.5f, muted: false);
-                        if (ShowRepairButton)
-                            DrawRepairButton(g);
-                    }
+                        DrawEdgeButton(g, _rcCancel, Loc.T("cancel"), 9.5f, muted: false);
+                    else if (ShowMoButton)
+                        DrawEdgeButton(g, _rcMo, Loc.T("modding"), 9.5f, muted: false);
                     DrawPlayButton(g);
+                    DrawTrayButton(g);
+                    DrawGearButton(g);
                     DrawCloseButton(g);
                 }
 
@@ -806,13 +845,13 @@ namespace FlappyReDovahLauncher
             {
                 string main;
                 if (_showProgress)
-                    main = string.IsNullOrEmpty(_statusText) ? "Updating…" : _statusText;
+                    main = string.IsNullOrEmpty(_statusText) ? Loc.T("updating") : _statusText;
                 else if (!GameCatalog.Current.Available)
                     main = string.IsNullOrEmpty(_statusText)
-                        ? (GameCatalog.Current.Description ?? "Coming soon")
+                        ? Loc.GameBlurb(GameCatalog.Current)
                         : _statusText;
                 else if (_showReady)
-                    main = "Ready to play";
+                    main = Loc.T("ready");
                 else
                     main = _statusText ?? "";
 
@@ -976,7 +1015,7 @@ namespace FlappyReDovahLauncher
         /// <summary>Edge-style glass button: dark plate, thin gold line, cream label.</summary>
         private void DrawPlayButton(Graphics g)
         {
-            string label = GameCatalog.Current.Available ? _playText : "Soon";
+            string label = GameCatalog.Current.Available ? _playText : Loc.T("soon");
             DrawEdgeButton(g, _rcPlay, label, 12f, muted: _busy || !GameCatalog.Current.Available);
         }
 
@@ -1088,11 +1127,6 @@ namespace FlappyReDovahLauncher
             }
         }
 
-        private void DrawRepairButton(Graphics g)
-        {
-            DrawEdgeButton(g, _rcRepair, "Repair", 9.5f, muted: false);
-        }
-
         private void DrawEdgeButton(Graphics g, Rectangle r, string label, float fontSize, bool muted)
         {
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -1150,26 +1184,69 @@ namespace FlappyReDovahLauncher
             }
         }
 
-        private void DrawCloseButton(Graphics g)
+        private void DrawChromePlate(Graphics g, Rectangle r)
         {
-            if (_iconClose == null)
-            {
-                // Fallback X
-                using (var pen = new Pen(Color.FromArgb(230, 255, 255, 255), 2f))
-                {
-                    int m = 7;
-                    g.DrawLine(pen, _rcClose.Left + m, _rcClose.Top + m, _rcClose.Right - m, _rcClose.Bottom - m);
-                    g.DrawLine(pen, _rcClose.Right - m, _rcClose.Top + m, _rcClose.Left + m, _rcClose.Bottom - m);
-                }
-                return;
-            }
-
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.InterpolationMode = InterpolationMode.HighQualityBicubic;
-            // Soft hit plate so X stays readable on light splash areas
-            using (var plate = new SolidBrush(Color.FromArgb(70, 0, 0, 0)))
-                g.FillEllipse(plate, Rectangle.Inflate(_rcClose, 2, 2));
-            g.DrawImage(_iconClose, _rcClose);
+            g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            // Opaque disc so splash does not show through button.png alpha
+            float pad = r.Width * 0.08f;
+            using (var plate = new SolidBrush(Color.FromArgb(255, 16, 14, 18)))
+                g.FillEllipse(plate, r.X + pad, r.Y + pad, r.Width - pad * 2, r.Height - pad * 2);
+            if (_iconChrome != null)
+                g.DrawImage(_iconChrome, r);
+        }
+
+        private static readonly Color ChromeGlyph = Color.FromArgb(235, 228, 214, 186);
+
+        private void DrawTrayButton(Graphics g)
+        {
+            DrawChromePlate(g, _rcTray);
+            using (var pen = new Pen(ChromeGlyph, 2.2f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round
+            })
+            {
+                int inset = 10;
+                int y = _rcTray.Y + _rcTray.Height * 18 / 32;
+                g.DrawLine(pen, _rcTray.Left + inset, y, _rcTray.Right - inset, y);
+            }
+        }
+
+        private void DrawGearButton(Graphics g)
+        {
+            DrawChromePlate(g, _rcGear);
+            float cx = _rcGear.X + _rcGear.Width / 2f;
+            float cy = _rcGear.Y + _rcGear.Height / 2f;
+            using (var br = new SolidBrush(ChromeGlyph))
+            using (var pen = new Pen(ChromeGlyph, 1.7f))
+            {
+                var state = g.Save();
+                g.TranslateTransform(cx, cy);
+                for (int i = 0; i < 6; i++)
+                {
+                    g.RotateTransform(60f);
+                    g.FillRectangle(br, -1.7f, -8.6f, 3.4f, 3.6f);
+                }
+                g.Restore(state);
+                g.DrawEllipse(pen, cx - 4.4f, cy - 4.4f, 8.8f, 8.8f);
+            }
+        }
+
+        private void DrawCloseButton(Graphics g)
+        {
+            DrawChromePlate(g, _rcClose);
+            using (var pen = new Pen(ChromeGlyph, 2.1f)
+            {
+                StartCap = LineCap.Round,
+                EndCap = LineCap.Round
+            })
+            {
+                int m = 10;
+                g.DrawLine(pen, _rcClose.Left + m, _rcClose.Top + m, _rcClose.Right - m, _rcClose.Bottom - m);
+                g.DrawLine(pen, _rcClose.Right - m, _rcClose.Top + m, _rcClose.Left + m, _rcClose.Bottom - m);
+            }
         }
 
         private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
@@ -1256,6 +1333,16 @@ namespace FlappyReDovahLauncher
                 Environment.Exit(0);
                 return;
             }
+            if (_rcGear.Contains(p))
+            {
+                OnClickSettings();
+                return;
+            }
+            if (_rcTray.Contains(p))
+            {
+                MinimizeToTray();
+                return;
+            }
             if (!_busy && _rcGames != null)
             {
                 for (int i = 0; i < _rcGames.Length && i < GameCatalog.Games.Count; i++)
@@ -1277,19 +1364,9 @@ namespace FlappyReDovahLauncher
                 OnClickCancel();
                 return;
             }
-            if (ShowVrChannelButton && _rcVrChannel.Contains(p))
-            {
-                OnClickVrChannel();
-                return;
-            }
             if (ShowMoButton && _rcMo.Contains(p))
             {
                 OnClickModding();
-                return;
-            }
-            if (ShowRepairButton && _rcRepair.Contains(p))
-            {
-                OnClickRepair();
                 return;
             }
             if (_rcDiscord.Contains(p))
@@ -1311,13 +1388,172 @@ namespace FlappyReDovahLauncher
 
         private void OnFormMouseUp(object sender, MouseEventArgs e) { }
 
+        private void OnClickSettings()
+        {
+            var action = SettingsForm.ShowSettings(this, _busy);
+            switch (action)
+            {
+                case SettingsAction.Repair:
+                    OnClickRepair();
+                    break;
+                case SettingsAction.GetVr:
+                case SettingsAction.RemoveVr:
+                    OnClickVrChannel();
+                    break;
+                case SettingsAction.BugReport:
+                    OnClickBugReport();
+                    break;
+                case SettingsAction.Uninstall:
+                    OnClickUninstall();
+                    break;
+            }
+        }
+
+        private void InitTray()
+        {
+            _trayMenu = new ContextMenuStrip();
+            _tray = new NotifyIcon
+            {
+                Visible = false,
+                Text = Loc.T("tray_tip")
+            };
+            try { _tray.Icon = Icon; } catch { }
+            if (_tray.Icon == null)
+            {
+                try { _tray.Icon = SystemIcons.Application; } catch { }
+            }
+            _tray.DoubleClick += (s, e) => RestoreFromTray();
+            RebuildTrayMenu();
+            _tray.ContextMenuStrip = _trayMenu;
+        }
+
+        private void RebuildTrayMenu()
+        {
+            if (_trayMenu == null) return;
+            _trayMenu.Items.Clear();
+            _trayMenu.Items.Add(Loc.T("tray_open"), null, (s, e) => RestoreFromTray());
+            _trayMenu.Items.Add(Loc.T("tray_exit"), null, (s, e) => Environment.Exit(0));
+            if (_tray != null) _tray.Text = Loc.T("tray_tip");
+        }
+
+        private void MinimizeToTray()
+        {
+            if (_tray == null) return;
+            _tray.Visible = true;
+            ShowInTaskbar = false;
+            Hide();
+        }
+
+        private void RestoreFromTray()
+        {
+            Show();
+            ShowInTaskbar = true;
+            WindowState = FormWindowState.Normal;
+            if (_tray != null) _tray.Visible = false;
+            Activate();
+            RedrawLayered(force: true);
+        }
+
+        private void OnClickUninstall()
+        {
+            if (_busy)
+            {
+                MessageBox.Show(Loc.T("uninstall_busy"), Loc.T("uninstall"));
+                return;
+            }
+            if (!PackageInstaller.IsInstalled())
+            {
+                MessageBox.Show(Loc.T("need_install"), Loc.T("uninstall"));
+                return;
+            }
+            var r = MessageBox.Show(
+                Loc.F("uninstall_ask", GameCatalog.Current.Title, GameCatalog.InstallRoot),
+                Loc.T("uninstall"),
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            if (r != DialogResult.Yes) return;
+            try
+            {
+                PackageInstaller.UninstallCurrentGame();
+                _isInstalled = false;
+                RefreshPlayState();
+                RefreshVersionText();
+                _statusText = Loc.T("ready_install");
+                RedrawLayered(force: true);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Error("uninstall", ex);
+                MessageBox.Show(FlappyException.FormatForUser(ex), Loc.T("fail_uninstall"));
+            }
+        }
+
+        private void OnClickBugReport()
+        {
+            if (_busy) return;
+            if (!PackageInstaller.IsInstalled())
+            {
+                MessageBox.Show(Loc.T("need_install"), Loc.T("bugreport"));
+                return;
+            }
+            _busy = true;
+            RefreshPlayState();
+            _showProgress = true;
+            _showReady = false;
+            _statusText = Loc.T("bugreport_wait");
+            _progressOverall = 0;
+            _progressCurrent = -1;
+            if (_jobCts != null) { try { _jobCts.Dispose(); } catch { } }
+            _jobCts = new CancellationTokenSource();
+            var token = _jobCts.Token;
+            RedrawLayered(force: true);
+
+            var bw = new BackgroundWorker();
+            bw.WorkerReportsProgress = true;
+            bw.DoWork += (o, args) =>
+            {
+                var worker = (BackgroundWorker)o;
+                args.Result = BugReportPacker.Run(
+                    (overall, current, msg) => worker.ReportProgress(0, UiProgress.Make(overall, current, msg)),
+                    token);
+            };
+            bw.ProgressChanged += (o, args) =>
+            {
+                ApplyUiProgress(args.UserState);
+                RedrawLayered(force: false);
+            };
+            bw.RunWorkerCompleted += (o, args) =>
+            {
+                _busy = false;
+                RefreshPlayState();
+                if (args.Error != null)
+                {
+                    MessageBox.Show(FlappyException.FormatForUser(args.Error), Loc.T("fail_bugreport"));
+                    IsReady = PackageInstaller.IsInstalled();
+                    return;
+                }
+                string archive = args.Result as string;
+                _statusText = Loc.T("ready");
+                IsReady = PackageInstaller.IsInstalled();
+                if (!string.IsNullOrEmpty(archive))
+                {
+                    MessageBox.Show(
+                        Loc.F("bugreport_done", archive) + Environment.NewLine + Environment.NewLine + Loc.T("bugreport_open_folder"),
+                        Loc.T("bugreport_done_title"),
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                    BugReportPacker.Reveal(archive);
+                }
+            };
+            bw.RunWorkerAsync();
+        }
+
         private void OnClickPlay()
         {
             if (!GameCatalog.Current.Available)
             {
                 MessageBox.Show(
-                    GameCatalog.Current.Title + " is not packaged yet.\n\n" +
-                    (GameCatalog.Current.Description ?? "Coming soon."),
+                    Loc.F("coming_soon_named", GameCatalog.Current.Title),
                     GameCatalog.Current.Title);
                 return;
             }
@@ -1335,7 +1571,7 @@ namespace FlappyReDovahLauncher
                 if (_jobCts != null && !_jobCts.IsCancellationRequested)
                 {
                     _jobCts.Cancel();
-                    _statusText = "Cancelling…\nPlease wait";
+                    _statusText = Loc.T("cancelling");
                     RedrawLayered(force: true);
                     LauncherLog.Info("User cancelled job");
                 }
@@ -1358,7 +1594,7 @@ namespace FlappyReDovahLauncher
             catch (Exception ex)
             {
                 LauncherLog.Error("modding", ex);
-                MessageBox.Show(FlappyException.FormatForUser(ex), "Mod Organizer");
+                MessageBox.Show(FlappyException.FormatForUser(ex), Loc.T("mo"));
             }
         }
 
@@ -1369,35 +1605,31 @@ namespace FlappyReDovahLauncher
             if (PackageInstaller.GetSavedChannel() == InstallChannel.AeOnly)
             {
                 var r = MessageBox.Show(
-                    "Download VR packages (StockGameVR, (VR) mods, VR profile)?\n\n" +
-                    "This can take a long time and needs extra disk space.\n" +
-                    "AE content already installed will be kept.",
-                    "Get VR",
+                    Loc.T("get_vr_ask"),
+                    Loc.T("get_vr"),
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Question);
                 if (r != DialogResult.Yes) return;
 
                 StartPackageJob(
-                    "Get VR…\nDownloading VR packages",
+                    Loc.T("get_vr_status"),
                     (index, report, cancel) => PackageInstaller.InstallVrChannel(index, report, cancel),
-                    "Get VR failed",
+                    Loc.T("fail_get_vr"),
                     launchAfter: false);
             }
             else
             {
                 var r = MessageBox.Show(
-                    "Remove all VR packages from this install?\n\n" +
-                    "Deletes StockGameVR, (VR) mods, and the VR profile.\n" +
-                    "AE content stays. You can use Get VR later to re-download.",
-                    "Remove VR",
+                    Loc.T("remove_vr_ask"),
+                    Loc.T("remove_vr"),
                     MessageBoxButtons.YesNo,
                     MessageBoxIcon.Warning);
                 if (r != DialogResult.Yes) return;
 
                 StartPackageJob(
-                    "Removing VR…\nPlease wait",
+                    Loc.T("remove_vr_status"),
                     (index, report, cancel) => PackageInstaller.RemoveVrChannel(index, report, cancel),
-                    "Remove VR failed",
+                    Loc.T("fail_remove_vr"),
                     launchAfter: false);
             }
         }
@@ -1407,13 +1639,8 @@ namespace FlappyReDovahLauncher
             if (_busy || !PackageInstaller.IsInstalled()) return;
 
             var r = MessageBox.Show(
-                "Repair compares local folders to CDN fingerprints (path|size).\n\n" +
-                "• Unchanged packages are skipped\n" +
-                "• profiles (MO2 user data) are kept if present\n" +
-                "• Incomplete/changed packages are re-downloaded\n" +
-                "• A report is written to repair_report.txt\n\n" +
-                "Scan now?",
-                "Repair",
+                Loc.T("repair_ask"),
+                Loc.T("repair"),
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Question);
             if (r != DialogResult.Yes) return;
@@ -1442,9 +1669,9 @@ namespace FlappyReDovahLauncher
             catch (OperationCanceledException) { return; }
 
             StartPackageJob(
-                "Preparing…\n" + (channel == InstallChannel.AeOnly ? "AE only" : "AE + VR"),
+                channel == InstallChannel.AeOnly ? Loc.T("preparing_ae") : Loc.T("preparing_vr"),
                 (index, report, cancel) => PackageInstaller.InstallAll(index, report, cancel, channel),
-                "Install / Update failed",
+                Loc.T("fail_install"),
                 launchAfter: Constants.AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING);
         }
 
@@ -1457,7 +1684,7 @@ namespace FlappyReDovahLauncher
             RefreshPlayState();
             _showProgress = true;
             _showReady = false;
-            _statusText = "Scanning packages…\nFingerprints";
+            _statusText = Loc.T("scan_fp");
             _progressOverall = 0;
             _progressCurrent = -1;
             if (_jobCts != null) { try { _jobCts.Dispose(); } catch { } }
@@ -1475,7 +1702,7 @@ namespace FlappyReDovahLauncher
                 var need = PackageInstaller.FindUnitsNeedingRepair(
                     index,
                     channel,
-                    msg => worker.ReportProgress(0, UiProgress.Make(1, -1, "Checking…\n" + msg)),
+                    msg => worker.ReportProgress(0, UiProgress.Make(1, -1, Loc.F("checking_n", msg))),
                     token);
                 PackageInstaller.WriteRepairReport(need,
                     PackageInstaller.FilterByChannel(index.units, channel),
@@ -1493,7 +1720,7 @@ namespace FlappyReDovahLauncher
                 {
                     _busy = false;
                     RefreshPlayState();
-                    MessageBox.Show(FlappyException.FormatForUser(args.Error), "Repair failed");
+                    MessageBox.Show(FlappyException.FormatForUser(args.Error), Loc.T("fail_repair"));
                     IsReady = PackageInstaller.IsInstalled();
                     return;
                 }
@@ -1504,19 +1731,22 @@ namespace FlappyReDovahLauncher
                 if (need.Count == 0)
                 {
                     _busy = false;
-                    _statusText = "Repair not needed\nAll packages match";
+                    _statusText = Loc.T("repair_not_needed");
                     _progressOverall = 100;
                     _progressCurrent = -1;
                     IsReady = true;
                     MessageBox.Show(
-                        "All packages match the CDN fingerprints.\nNothing to download.\n\nSee repair_report.txt",
-                        "Repair");
+                        Loc.F("repair_ok", GameCatalog.Current.Id),
+                        Loc.T("repair"));
                     return;
                 }
 
                 var sb = new System.Text.StringBuilder();
-                sb.AppendLine("Packages to re-download: " + need.Count);
-                sb.AppendLine("Channel: " + (channel == InstallChannel.AeOnly ? "AE only" : "AE + VR"));
+                sb.AppendLine(Loc.F("repair_to_dl", need.Count));
+                sb.AppendLine(Loc.T("settings_hint").Contains("{1}")
+                    ? Loc.F("settings_hint", GameCatalog.Current.Title,
+                        channel == InstallChannel.AeOnly ? Loc.T("channel_ae_short") : Loc.T("channel_full_short"))
+                    : "");
                 sb.AppendLine();
                 long bytes = 0;
                 int show = Math.Min(15, need.Count);
@@ -1527,23 +1757,23 @@ namespace FlappyReDovahLauncher
                     bytes += Math.Max(0, u.packageSize);
                 }
                 if (need.Count > show)
-                    sb.AppendLine("• … and " + (need.Count - show) + " more");
+                    sb.AppendLine(Loc.F("repair_more", need.Count - show));
                 if (bytes > 0)
-                    sb.AppendLine().AppendLine("Approx. download: " + FormatApproxSize(bytes));
-                sb.AppendLine().AppendLine("Details: repair_report.txt");
-                sb.AppendLine().Append("Download and repair these packages?");
+                    sb.AppendLine().AppendLine(Loc.F("repair_approx", FormatApproxSize(bytes)));
+                sb.AppendLine().AppendLine(Loc.F("repair_details", GameCatalog.Current.Id));
+                sb.AppendLine().Append(Loc.T("repair_go"));
 
-                var r = MessageBox.Show(sb.ToString(), "Repair", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                var r = MessageBox.Show(sb.ToString(), Loc.T("repair"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
                 if (r != DialogResult.Yes)
                 {
                     _busy = false;
-                    _statusText = "Ready to play";
+                    _statusText = Loc.T("ready");
                     RefreshPlayState();
                     RedrawLayered(force: true);
                     return;
                 }
 
-                _statusText = "Repairing…\n" + need.Count + " packages";
+                _statusText = Loc.F("repairing", need.Count);
                 _progressOverall = 0;
                 _progressCurrent = -1;
                 RedrawLayered(force: true);
@@ -1574,11 +1804,11 @@ namespace FlappyReDovahLauncher
                     _isInstalled = PackageInstaller.IsInstalled();
                     if (a2.Error != null)
                     {
-                        MessageBox.Show(FlappyException.FormatForUser(a2.Error), "Repair failed");
+                        MessageBox.Show(FlappyException.FormatForUser(a2.Error), Loc.T("fail_repair"));
                         IsReady = _isInstalled;
                         return;
                     }
-                    _statusText = "Ready to play";
+                    _statusText = Loc.T("ready");
                     RefreshVersionText();
                     IsReady = true;
                 };
@@ -1635,7 +1865,7 @@ namespace FlappyReDovahLauncher
             if (_busy) return;
             if (!GameCatalog.Current.Available)
             {
-                MessageBox.Show(GameCatalog.Current.Description ?? "Coming soon.", GameCatalog.Current.Title);
+                MessageBox.Show(Loc.GameBlurb(GameCatalog.Current), GameCatalog.Current.Title);
                 return;
             }
             _busy = true;
@@ -1677,7 +1907,7 @@ namespace FlappyReDovahLauncher
                     IsReady = _isInstalled;
                     return;
                 }
-                _statusText = "Ready to play";
+                _statusText = Loc.T("ready");
                 _progressCurrent = -1;
                 if (_cachedIndex != null)
                     OnlineVersion = PackageInstaller.ParseVersion(_cachedIndex.version);
@@ -1702,7 +1932,7 @@ namespace FlappyReDovahLauncher
             catch (Exception ex)
             {
                 LauncherLog.Error("launch", ex);
-                MessageBox.Show(FlappyException.FormatForUser(ex), "Launch failed");
+                MessageBox.Show(FlappyException.FormatForUser(ex), Loc.T("launch_failed"));
                 IsReady = false;
             }
         }
@@ -1716,7 +1946,7 @@ namespace FlappyReDovahLauncher
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Cannot open link:\n" + ex.Message, "Flappy Launcher");
+                MessageBox.Show(Loc.F("link_failed", ex.Message), Constants.LAUNCHER_NAME);
             }
         }
 

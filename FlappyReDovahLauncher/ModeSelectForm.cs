@@ -21,7 +21,7 @@ namespace FlappyReDovahLauncher
 
             var title = new Label
             {
-                Text = "Choose mode",
+                Text = Loc.T("mode_title"),
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 Font = new Font("Segoe UI Semibold", 16f, FontStyle.Bold),
@@ -32,7 +32,7 @@ namespace FlappyReDovahLauncher
 
             var hint = new Label
             {
-                Text = "Last choice: " + (string.IsNullOrEmpty(lastMode) ? "none" : lastMode),
+                Text = Loc.F("mode_last", string.IsNullOrEmpty(lastMode) ? Loc.T("mode_none") : lastMode),
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleCenter,
                 ForeColor = FlappyTheme.Mute,
@@ -40,8 +40,8 @@ namespace FlappyReDovahLauncher
                 Size = new Size(380, 24)
             };
 
-            _btnAe = FlappyTheme.MakeGoldButton("AE\nSkyrim AE", new Point(30, 100), new Size(170, 90), primary: true);
-            _btnVr = FlappyTheme.MakeGoldButton("VR\nSkyrim VR", new Point(220, 100), new Size(170, 90), primary: false);
+            _btnAe = FlappyTheme.MakeGoldButton(Loc.T("mode_ae"), new Point(30, 100), new Size(170, 90), primary: true);
+            _btnVr = FlappyTheme.MakeGoldButton(Loc.T("mode_vr"), new Point(220, 100), new Size(170, 90), primary: false);
             _btnAe.Font = new Font("Segoe UI Semibold", 12f, FontStyle.Bold);
             _btnVr.Font = new Font("Segoe UI Semibold", 12f, FontStyle.Bold);
 
@@ -62,7 +62,7 @@ namespace FlappyReDovahLauncher
                 Close();
             };
 
-            var cancel = FlappyTheme.MakeGoldButton("Cancel", new Point(145, 215), new Size(130, 34), primary: false);
+            var cancel = FlappyTheme.MakeGoldButton(Loc.T("cancel"), new Point(145, 215), new Size(130, 34), primary: false);
             cancel.DialogResult = DialogResult.Cancel;
             cancel.ForeColor = FlappyTheme.Mute;
             cancel.BackColor = FlappyTheme.CancelBack;

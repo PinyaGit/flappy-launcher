@@ -19,8 +19,11 @@ namespace FlappyReDovahLauncher
                 if (_edgeBarFrame != null) { _edgeBarFrame.Dispose(); _edgeBarFrame = null; }
                 if (_edgeBarTrack != null) { _edgeBarTrack.Dispose(); _edgeBarTrack = null; }
                 if (_iconClose != null) { _iconClose.Dispose(); _iconClose = null; }
+                if (_iconChrome != null) { _iconChrome.Dispose(); _iconChrome = null; }
                 if (_iconDiscord != null) { _iconDiscord.Dispose(); _iconDiscord = null; }
                 if (_iconBoosty != null) { _iconBoosty.Dispose(); _iconBoosty = null; }
+                if (_tray != null) { _tray.Visible = false; _tray.Dispose(); _tray = null; }
+                if (_trayMenu != null) { _trayMenu.Dispose(); _trayMenu = null; }
             }
             base.Dispose(disposing);
         }

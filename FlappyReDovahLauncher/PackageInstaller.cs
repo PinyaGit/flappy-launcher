@@ -272,10 +272,7 @@ namespace FlappyReDovahLauncher
 
             EnsureSevenZip(progress, cancel);
             if (string.IsNullOrEmpty(SevenZipPath) || !File.Exists(SevenZipPath))
-                throw new FlappyException(
-                    "7-Zip is not available.\n\n" +
-                    "The launcher downloads it from https://www.7-zip.org/ on first install.\n" +
-                    "Check your network, or install 7-Zip system-wide.");
+                throw new FlappyException(Loc.T("sevenzip_missing"));
 
             Directory.CreateDirectory(GameRootPath);
             Directory.CreateDirectory(DownloadCacheDir);
@@ -284,19 +281,19 @@ namespace FlappyReDovahLauncher
             var vrUnits = GetVrUnits(index.units);
             if (vrUnits.Count == 0)
             {
-                progress(100, -1, "No VR packages in index.");
+                progress(100, -1, Loc.T("no_vr_index"));
                 return;
             }
 
             // Only scan VR units (do not re-fingerprint the whole AE set).
-            progress(1, -1, "Checking VR packages…");
+            progress(1, -1, Loc.T("checking_vr"));
             var work = new List<PackageUnit>();
             for (int i = 0; i < vrUnits.Count; i++)
             {
                 cancel.ThrowIfCancellationRequested();
                 var unit = vrUnits[i];
                 if (progress != null)
-                    progress(1, -1, string.Format("Checking VR {0}/{1}:\n{2}", i + 1, vrUnits.Count, DisplayName(unit)));
+                    progress(1, -1, Loc.F("checking_n", DisplayName(unit)));
 
                 if (IsUserDataUnit(unit))
                 {
@@ -313,7 +310,7 @@ namespace FlappyReDovahLauncher
             {
                 FinishInstallFlag(index.version, "Get VR ok (already present)");
                 SaveLocalVersion(index.version ?? "1.0.0");
-                progress(100, -1, "VR packages already present.\nChannel: AE + VR");
+                progress(100, -1, Loc.T("vr_already"));
                 return;
             }
 
@@ -332,7 +329,7 @@ namespace FlappyReDovahLauncher
                 onlyMismatched: false,
                 wipeMismatched: false,
                 channel: InstallChannel.AeAndVr,
-                jobName: "Get VR");
+                jobName: Loc.T("job_get_vr"));
         }
 
         /// <summary>Remove VR packages from disk and switch channel back to AE-only.</summary>
@@ -360,7 +357,7 @@ namespace FlappyReDovahLauncher
                 cancel.ThrowIfCancellationRequested();
                 i++;
                 string name = DisplayName(unit);
-                progress(ClampPct(i * 90.0 / Math.Max(1, total)), -1, "Removing VR:\n" + name);
+                progress(ClampPct(i * 90.0 / Math.Max(1, total)), -1, Loc.F("removing_vr", name));
                 if (!IsRootUnit(unit))
                     WipeUnitDestination(unit);
             }
@@ -370,7 +367,7 @@ namespace FlappyReDovahLauncher
                 cancel.ThrowIfCancellationRequested();
                 i++;
                 string dest = Path.Combine(GameRootPath, rel);
-                progress(ClampPct(i * 90.0 / Math.Max(1, total)), -1, "Removing VR:\n" + rel);
+                progress(ClampPct(i * 90.0 / Math.Max(1, total)), -1, Loc.F("removing_vr", rel));
                 if (Directory.Exists(dest))
                 {
                     try { Directory.Delete(dest, true); }
@@ -404,8 +401,43 @@ namespace FlappyReDovahLauncher
             if (string.Equals(GetSavedMode(), "VR", StringComparison.OrdinalIgnoreCase))
                 SaveMode("AE");
 
-            progress(100, -1, "VR removed.\nChannel: AE only");
+            progress(100, -1, Loc.T("vr_removed"));
             LauncherLog.Info("Remove VR done, channel=AE");
+        }
+
+        /// <summary>Delete this game's install folder + version/cache. Launcher exe stays.</summary>
+        public static void UninstallCurrentGame()
+        {
+            string root = GameRootPath;
+            if (string.IsNullOrEmpty(root))
+                throw new FlappyException(Loc.T("need_install"));
+            if (!Directory.Exists(root) && !File.Exists(InstallFlagPath))
+                throw new FlappyException(Loc.T("need_install"));
+
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+            catch (Exception ex)
+            {
+                throw new FlappyException(
+                    Loc.IsRu
+                        ? "Не удалось удалить папку:\n" + root + "\n\nЗакройте MO2 / игру и повторите."
+                        : "Cannot remove:\n" + root + "\n\nClose MO2/game and retry.",
+                    ex.ToString(), ex);
+            }
+
+            try { if (File.Exists(LocalVersionPath)) File.Delete(LocalVersionPath); } catch { }
+            try
+            {
+                string cache = DownloadCacheDir;
+                if (!string.IsNullOrEmpty(cache) && Directory.Exists(cache))
+                    Directory.Delete(cache, true);
+            }
+            catch { }
+
+            LauncherLog.Info("Uninstalled game " + GameCatalog.Current.Id + " at " + root);
         }
 
         public static PlayButtonState ResolvePlayState(bool installed, Version local, Version online, bool busy)
@@ -451,7 +483,7 @@ namespace FlappyReDovahLauncher
                 onlyMismatched: update,
                 wipeMismatched: false,
                 channel: channel,
-                jobName: update ? "Update" : "Install");
+                jobName: update ? Loc.T("job_update") : Loc.T("job_install"));
         }
 
         public static void RepairAll(Index index, ProgressHandler progress, CancellationToken cancel, InstallChannel channel)
@@ -460,7 +492,7 @@ namespace FlappyReDovahLauncher
                 onlyMismatched: true,
                 wipeMismatched: true,
                 channel: channel,
-                jobName: "Repair");
+                jobName: Loc.T("job_repair"));
         }
 
         public static List<PackageUnit> FindUnitsNeedingRepair(
@@ -665,10 +697,7 @@ namespace FlappyReDovahLauncher
 
             EnsureSevenZip(progress, cancel);
             if (string.IsNullOrEmpty(SevenZipPath) || !File.Exists(SevenZipPath))
-                throw new FlappyException(
-                    "7-Zip is not available.\n\n" +
-                    "The launcher downloads it from https://www.7-zip.org/ on first install.\n" +
-                    "Check your network, or install 7-Zip system-wide.");
+                throw new FlappyException(Loc.T("sevenzip_missing"));
 
             Directory.CreateDirectory(GameRootPath);
             Directory.CreateDirectory(DownloadCacheDir);
@@ -681,8 +710,8 @@ namespace FlappyReDovahLauncher
             int skipped = 0;
             if (onlyMismatched)
             {
-                progress(0, -1, "Checking fingerprints…\nPlease wait");
-                work = FindUnitsNeedingRepair(index, channel, msg => progress(1, -1, "Checking…\n" + msg), cancel);
+                progress(0, -1, Loc.T("checking_fp"));
+                work = FindUnitsNeedingRepair(index, channel, msg => progress(1, -1, Loc.F("checking_n", msg)), cancel);
                 skipped = scoped.Count - work.Count;
                 WriteRepairReport(work, scoped, jobName + " scan");
             }
@@ -696,7 +725,7 @@ namespace FlappyReDovahLauncher
                 FinishInstallFlag(index.version, jobName + " ok skipped=" + skipped);
                 SaveLocalVersion(index.version ?? "1.0.0");
                 try { RestoreModOrder(); } catch (Exception ex) { LauncherLog.Warn("modlist: " + ex.Message); }
-                progress(100, -1, jobName + " complete.\nAll packages OK (" + skipped + ")");
+                progress(100, -1, Loc.F("job_complete_ok", jobName, skipped));
                 return;
             }
 
@@ -724,8 +753,8 @@ namespace FlappyReDovahLauncher
             var workerTasks = new Task[workers];
 
             progress(2, -1, localBundle
-                ? ("Packages: " + work.Count + "\nLocal prefer + CDN fallback · starting…")
-                : ("Downloading " + work.Count + " package(s)\n" + Constants.DOWNLOAD_PARALLELISM + " workers · starting…"));
+                ? Loc.F("dl_local", work.Count)
+                : Loc.F("dl_start", work.Count, Constants.DOWNLOAD_PARALLELISM));
 
             Action reportUi = () =>
             {
@@ -878,7 +907,7 @@ namespace FlappyReDovahLauncher
                 string dest = ResolveExtractDir(unit);
                 Directory.CreateDirectory(dest);
                 int extractCur = ClampPct(100.0 * i / Math.Max(1, total));
-                progress(ClampPct(basePct + 5.0 / total), extractCur, "Extracting " + i + "/" + total + ":\n" + name);
+                progress(ClampPct(basePct + 5.0 / total), extractCur, Loc.F("extracting", i, total, name));
                 Extract7z(local, dest);
                 // Never delete torrent/offline package files; only purge download_cache copies
                 string idKey = unit.id ?? ShortName(name);
@@ -899,7 +928,7 @@ namespace FlappyReDovahLauncher
 
             FinishInstallFlag(index.version, jobName + " fixed=" + total + " skipped=" + skipped);
             SaveLocalVersion(index.version ?? "1.0.0");
-            progress(100, -1, jobName + " complete.\n" + total + " package(s)");
+            progress(100, -1, Loc.F("job_complete", jobName, total));
             LauncherLog.Info(jobName + " done fixed=" + total + " skipped=" + skipped);
         }
 
@@ -1107,8 +1136,7 @@ namespace FlappyReDovahLauncher
         {
             mode = (mode == "VR") ? "VR" : "AE";
             if (mode == "VR" && GetSavedChannel() == InstallChannel.AeOnly)
-                throw new FlappyException(
-                    "This install is AE-only.\n\nUse the \"Get VR\" button to download VR packages.");
+                throw new FlappyException(Loc.T("ae_only_vr"));
 
             SaveMode(mode);
 
@@ -1128,7 +1156,7 @@ namespace FlappyReDovahLauncher
             string execTitle = GetStartExecutableTitle(mode);
 
             if (!File.Exists(moExe))
-                throw new FlappyException("ModOrganizer.exe not found.\nInstall or Repair the pack first.");
+                throw new FlappyException(Loc.T("mo_missing"));
             if (!Directory.Exists(stockDir.TrimEnd('\\')))
                 throw new FlappyException(stockSub + " folder not found.\n\nIf you chose AE-only, use AE mode.");
             if (!File.Exists(iniProfile))
@@ -1256,7 +1284,6 @@ namespace FlappyReDovahLauncher
             var sb = new StringBuilder();
             sb.Append(finished).Append('/').Append(total);
             sb.Append("  ·  ").Append(FormatSpeed(bytesPerSec));
-            // Active files (up to 3)
             var active = new List<DlSlot>();
             foreach (var s in slots)
             {
@@ -1266,7 +1293,7 @@ namespace FlappyReDovahLauncher
                 active.Add(s);
             }
             active.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
-            int n = Math.Min(3, active.Count);
+            int n = Math.Min(Math.Max(1, Constants.DOWNLOAD_PARALLELISM), active.Count);
             if (n == 0)
             {
                 sb.Append("\nstarting…");

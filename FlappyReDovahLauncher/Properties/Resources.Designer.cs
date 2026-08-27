@@ -78,5 +78,10 @@ namespace FlappyReDovahLauncher.Properties {
         internal static System.Drawing.Bitmap cross {
             get { return (System.Drawing.Bitmap)ResourceManager.GetObject("cross", resourceCulture); }
         }
+
+        /// <summary>Round chrome plate under close / tray / settings.</summary>
+        internal static System.Drawing.Bitmap chrome_btn {
+            get { return (System.Drawing.Bitmap)ResourceManager.GetObject("chrome_btn", resourceCulture); }
+        }
     }
 }

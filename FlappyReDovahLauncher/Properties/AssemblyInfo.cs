@@ -18,5 +18,5 @@ using System.Runtime.InteropServices;
 [assembly: Guid("fc42614e-0b3e-43f4-a3d7-c778dde64175")]
 
 // Launcher app version (self-update). Not tied to any single game/modpack.
-[assembly: AssemblyVersion("0.0.5.0")]
-[assembly: AssemblyFileVersion("0.0.5.0")]
+[assembly: AssemblyVersion("0.0.9.0")]
+[assembly: AssemblyFileVersion("0.0.9.0")]

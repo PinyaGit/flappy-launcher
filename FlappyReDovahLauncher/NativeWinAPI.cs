@@ -17,6 +17,11 @@ namespace FlappyReDovahLauncher
         public const int ULW_ALPHA = 0x00000002;
 
         public const int GWLP_HWNDPARENT = -8;
+        public const int SW_SHOW = 5;
+        public const int SW_RESTORE = 9;
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
         [DllImport("user32.dll")]
         public static extern int SendMessage(IntPtr hWnd, int Msg, int wParam, int lParam);

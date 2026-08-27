@@ -39,7 +39,7 @@ namespace FlappyReDovahLauncher
             };
             var c = new HttpClient(handler);
             c.Timeout = TimeSpan.FromHours(6);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("FlappyLauncher/0.0.5");
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("FlappyLauncher/0.0.9");
             c.DefaultRequestHeaders.ConnectionClose = false;
             return c;
         }
