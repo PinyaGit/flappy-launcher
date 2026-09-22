@@ -6,8 +6,8 @@ using System.Threading;
 namespace FlappyReDovahLauncher
 {
     /// <summary>
-    /// Resolves 7-Zip CLI without shipping binaries next to the launcher.
-    /// Order: LocalAppData cache → installed 7-Zip → download official Extra + 7zr bootstrap.
+    /// Own 7-Zip CLI in LocalAppData. Never uses Program Files / PATH 7-Zip —
+    /// a system install is often older than the archives this launcher ships.
     /// </summary>
     internal static class SevenZipBootstrap
     {
@@ -32,60 +32,170 @@ namespace FlappyReDovahLauncher
             }
         }
 
-        /// <summary>Path to 7za/7z/7zr that can extract packages. May be null before Ensure.</summary>
-        public static string ResolvedPath
+        private static string VersionStampPath
         {
-            get { return _resolvedPath ?? FindExisting(); }
+            get { return Path.Combine(ToolsDirectory, "version.txt"); }
         }
 
-        public static string FindExisting()
+        /// <summary>Path to managed 7za. May be null before Ensure.</summary>
+        public static string ResolvedPath
         {
-            // Preferred: cached x64 standalone from Extra package
-            string[] cache =
+            get { return _resolvedPath ?? FindManagedCli(); }
+        }
+
+        /// <summary>7za from our bundled/embedded resources or LocalAppData cache only (never system 7-Zip).</summary>
+        public static string FindManagedCli()
+        {
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string[] candidates =
             {
+                // 1. Next to the launcher itself
+                Path.Combine(baseDir, "7za.exe"),
+                Path.Combine(baseDir, "tools", "7za.exe"),
+                Path.Combine(baseDir, "tools", "7zip", "x64", "7za.exe"),
+                // 2. Managed LocalAppData cache
                 Path.Combine(ToolsDirectory, "x64", "7za.exe"),
-                Path.Combine(ToolsDirectory, "7za.exe"),
-                Path.Combine(ToolsDirectory, "7zr.exe")
+                Path.Combine(ToolsDirectory, "7za.exe")
             };
-            foreach (var p in cache)
+            foreach (var p in candidates)
+            {
+                if (File.Exists(p) && new FileInfo(p).Length > 50 * 1024)
+                {
+                    if (CacheMatchesPinned() || p.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase))
+                        return p;
+                }
+            }
+
+            // 3. Extract embedded 7-Zip tools if cache is empty or stale
+            if (TryExtractEmbeddedTools())
+            {
+                string p = Path.Combine(ToolsDirectory, "x64", "7za.exe");
                 if (File.Exists(p) && new FileInfo(p).Length > 50 * 1024)
                     return p;
-
-            // System install
-            string[] system =
-            {
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "7-Zip", "7z.exe"),
-                @"C:\Program Files\7-Zip\7z.exe",
-                @"C:\Program Files (x86)\7-Zip\7z.exe"
-            };
-            foreach (var p in system)
-                if (File.Exists(p)) return p;
-
-            // Legacy: next to exe (old publishes) — still works, not required
-            string next = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "7za.exe");
-            if (File.Exists(next)) return next;
+            }
 
             return null;
         }
 
+        public static bool TryExtractEmbeddedTools()
+        {
+            try
+            {
+                var asm = System.Reflection.Assembly.GetExecutingAssembly();
+                string[] names = asm.GetManifestResourceNames();
+                string targetDir = Path.Combine(ToolsDirectory, "x64");
+                Directory.CreateDirectory(targetDir);
+
+                string[] toolFiles = { "7za.exe", "7za.dll", "7zxa.dll" };
+                bool anyExtracted = false;
+
+                foreach (string file in toolFiles)
+                {
+                    string resName = null;
+                    foreach (var n in names)
+                    {
+                        if (n.EndsWith("." + file, StringComparison.OrdinalIgnoreCase) ||
+                            n.Equals(file, StringComparison.OrdinalIgnoreCase))
+                        {
+                            resName = n;
+                            break;
+                        }
+                    }
+
+                    if (resName != null)
+                    {
+                        string outPath = Path.Combine(targetDir, file);
+                        using (var s = asm.GetManifestResourceStream(resName))
+                        {
+                            if (s != null)
+                            {
+                                using (var fs = new FileStream(outPath, FileMode.Create, FileAccess.Write))
+                                {
+                                    s.CopyTo(fs);
+                                }
+                                anyExtracted = true;
+                            }
+                        }
+                    }
+                }
+
+                if (anyExtracted)
+                {
+                    File.WriteAllText(VersionStampPath, PinnedVersion);
+                    LauncherLog.Info("7-Zip: extracted embedded tools to " + targetDir);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("7-Zip: embedded extraction failed: " + ex.Message);
+            }
+            return false;
+        }
+
+        private static bool CacheMatchesPinned()
+        {
+            try
+            {
+                if (!File.Exists(VersionStampPath)) return false;
+                return string.Equals(
+                    File.ReadAllText(VersionStampPath).Trim(),
+                    PinnedVersion,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        private static bool IsManagedPath(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            try
+            {
+                string baseDir = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory).TrimEnd('\\', '/') + "\\";
+                string root = Path.GetFullPath(ToolsDirectory).TrimEnd('\\', '/') + "\\";
+                string full = Path.GetFullPath(path);
+                return full.StartsWith(root, StringComparison.OrdinalIgnoreCase) ||
+                       full.StartsWith(baseDir, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
         /// <summary>
-        /// Ensure a working 7-Zip CLI is available. Downloads from 7-zip.org / GitHub if needed.
-        /// Call before first extract (Install/Repair/Update).
+        /// Ensure pinned 7za is in LocalAppData. First extracts embedded 7za;
+        /// downloads Extra only as fallback. Never falls back to a system 7-Zip install.
         /// </summary>
         public static string Ensure(Action<string> status, CancellationToken cancel)
         {
             lock (Gate)
             {
-                if (!string.IsNullOrEmpty(_resolvedPath) && File.Exists(_resolvedPath))
+                if (!string.IsNullOrEmpty(_resolvedPath)
+                    && File.Exists(_resolvedPath)
+                    && IsManagedPath(_resolvedPath)
+                    && CacheMatchesPinned())
                     return _resolvedPath;
 
-                string existing = FindExisting();
-                if (!string.IsNullOrEmpty(existing))
+                string existing = FindManagedCli();
+                if (!string.IsNullOrEmpty(existing) && (CacheMatchesPinned() || IsManagedPath(existing)))
                 {
                     _resolvedPath = existing;
-                    LauncherLog.Info("7-Zip: using " + existing);
+                    LauncherLog.Info("7-Zip: using managed " + existing);
                     return existing;
                 }
+
+                // 1) Try extracting from launcher's own embedded resources first
+                if (TryExtractEmbeddedTools())
+                {
+                    string embedded = Path.Combine(ToolsDirectory, "x64", "7za.exe");
+                    if (File.Exists(embedded))
+                    {
+                        _resolvedPath = embedded;
+                        LauncherLog.Info("7-Zip: using embedded " + embedded);
+                        return embedded;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(existing))
+                    LauncherLog.Info("7-Zip: cache stale or unpinned, redownloading " + PinnedVersion);
 
                 if (status != null) status("Downloading 7-Zip…\nfrom 7-zip.org");
                 LauncherLog.Info("7-Zip: not found, downloading official Extra package");
@@ -110,16 +220,18 @@ namespace FlappyReDovahLauncher
 
                     string x64 = Path.Combine(tools, "x64", "7za.exe");
                     string x86 = Path.Combine(tools, "7za.exe");
-                    string resolved = File.Exists(x64) ? x64 : (File.Exists(x86) ? x86 : sevenZr);
+                    string resolved = File.Exists(x64) ? x64 : (File.Exists(x86) ? x86 : null);
 
-                    if (!File.Exists(resolved))
+                    if (string.IsNullOrEmpty(resolved) || !File.Exists(resolved))
                         throw new FlappyException(
                             "7-Zip Extra extracted but 7za.exe was not found in:\n" + tools);
 
                     try { File.Delete(extra); } catch { }
 
+                    try { File.WriteAllText(VersionStampPath, PinnedVersion); } catch { }
+
                     _resolvedPath = resolved;
-                    LauncherLog.Info("7-Zip: installed " + resolved);
+                    LauncherLog.Info("7-Zip: installed managed " + resolved + " v" + PinnedVersion);
                     if (status != null) status("7-Zip ready");
                     return resolved;
                 }
@@ -134,8 +246,8 @@ namespace FlappyReDovahLauncher
                 catch (Exception ex)
                 {
                     throw new FlappyException(
-                        "Could not download 7-Zip tools.\n\n" +
-                        "Install 7-Zip from https://www.7-zip.org/ or check your network.\n\n" +
+                        "Could not download 7-Zip tools for the launcher.\n\n" +
+                        "Check your network. The launcher does not use a system 7-Zip install.\n\n" +
                         ex.Message,
                         ex.ToString(), ex);
                 }

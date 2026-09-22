@@ -14,6 +14,11 @@ namespace FlappyReDovahLauncher
         public string fingerprint { get; set; }
         /// <summary>SHA-256 of the .7z package (hex). Optional for old indexes.</summary>
         public string packageSha256 { get; set; }
+        /// <summary>
+        /// True for StockGame / StockGameVR: download once on clean install, never again
+        /// while the destination folder still exists (Update and Repair skip it).
+        /// </summary>
+        public bool installOnce { get; set; }
     }
 
     internal class PackageIndex

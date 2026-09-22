@@ -2,9 +2,9 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
+using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Web.Script.Serialization;
 using System.Windows.Forms;
 
 namespace FlappyReDovahLauncher
@@ -17,6 +17,10 @@ namespace FlappyReDovahLauncher
     {
         private const string SkipArg = "--skip-self-update";
 
+        /// <summary>Cache for GetLocalVersion(); populated on first call (self-update runs once at startup).</summary>
+        private static Version _localVersion = new Version(0, 0, 0, 0);
+        private static bool _localVersionResolved;
+
         /// <summary>
         /// Returns true if the process should exit (updater will restart the new exe).
         /// Network/parse failures are soft — launcher continues.
@@ -26,35 +30,31 @@ namespace FlappyReDovahLauncher
             if (!Constants.CHECK_LAUNCHER_UPDATES)
                 return false;
 
-            if (args != null)
+            if (args != null && args.Any(a => string.Equals(a, SkipArg, StringComparison.OrdinalIgnoreCase)))
             {
-                foreach (var a in args)
-                {
-                    if (string.Equals(a, SkipArg, StringComparison.OrdinalIgnoreCase))
-                    {
-                        LauncherLog.Info("Self-update skipped via " + SkipArg);
-                        return false;
-                    }
-                }
+                LauncherLog.Info("Self-update skipped via " + SkipArg);
+                return false;
             }
 
             try
             {
-                return RunUpdateFlow();
+                var outcome = RunUpdateFlow();
+                if (!outcome.Installed && !string.IsNullOrEmpty(outcome.Reason))
+                {
+                    // Never leave the work log "clean" on a failed update: record why.
+                    string why = outcome.Reason;
+                    LauncherLog.Warn("Self-update FAILED — " + why + "; continuing with local version " + GetLocalVersion());
+                    ShowSelfFailDialog(why);
+                }
+                return outcome.Installed;   // true → exit into the new exe, false → keep running this instance
             }
             catch (Exception ex)
             {
-                LauncherLog.Error("Self-update failed (continuing)", ex);
+                string msg = FlappyException.FormatForUser(ex);
+                LauncherLog.Error("Self-update FAILED — " + msg, ex);
                 try
                 {
-                    MessageBox.Show(
-                        Loc.F("self_fail",
-                            FlappyException.FormatForUser(ex),
-                            Constants.LAUNCHER_PACKAGE_URL,
-                            Constants.LAUNCHER_EXE_NAME),
-                        Loc.F("self_fail_title", Constants.LAUNCHER_NAME),
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Warning);
+                    ShowSelfFailDialog(msg);
                 }
                 catch { /* no UI */ }
                 return false;
@@ -92,7 +92,34 @@ namespace FlappyReDovahLauncher
             }
         }
 
-        private static bool RunUpdateFlow()
+        /// <summary>Why the update did not apply (empty when it was deployed).</summary>
+        private sealed class UpdateOutcome
+        {
+            public bool Installed;   // new launcher downloaded + copied → caller should exit into it
+            public string Reason;    // why NOT installed; empty when installed or there was nothing to do
+
+            public UpdateOutcome(bool installed, string reason)
+            {
+                Installed = installed;
+                Reason = reason;
+            }
+        }
+
+        /// <summary>Show the user a warning with the reason, if we have UI.</summary>
+        private static void ShowSelfFailDialog(string reason)
+        {
+            try
+            {
+                MessageBox.Show(
+                    Loc.F("self_fail", reason, Constants.LAUNCHER_PACKAGE_URL, Constants.LAUNCHER_EXE_NAME),
+                    Loc.F("self_fail_title", Constants.LAUNCHER_NAME),
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+            }
+            catch { /* no UI */ }
+        }
+
+        private static UpdateOutcome RunUpdateFlow()
         {
             Version local = GetLocalVersion();
             LauncherLog.Info("Launcher version local=" + local);
@@ -106,27 +133,27 @@ namespace FlappyReDovahLauncher
             catch (Exception ex)
             {
                 LauncherLog.Warn("Self-update: cannot fetch version.json — " + ex.Message);
-                return false;
+                return new UpdateOutcome(false, "cannot reach CDN (" + ex.Message + ")");
             }
 
             if (string.IsNullOrWhiteSpace(json))
             {
                 LauncherLog.Warn("Self-update: empty version.json");
-                return false;
+                return new UpdateOutcome(false, "CDN returned an empty manifest");
             }
 
             var man = ParseManifest(json);
             if (man == null || string.IsNullOrWhiteSpace(man.version))
             {
                 LauncherLog.Warn("Self-update: invalid version.json");
-                return false;
+                return new UpdateOutcome(false, "version.json has no valid version field");
             }
 
             Version remote;
             if (!Version.TryParse(NormalizeVersion(man.version), out remote))
             {
                 LauncherLog.Warn("Self-update: bad remote version " + man.version);
-                return false;
+                return new UpdateOutcome(false, "remote version '" + man.version + "' is not parseable");
             }
 
             LauncherLog.Info("Launcher version remote=" + remote);
@@ -134,7 +161,7 @@ namespace FlappyReDovahLauncher
             if (remote <= local)
             {
                 LauncherLog.Info("Self-update: up to date");
-                return false;
+                return new UpdateOutcome(false, "");
             }
 
             bool mandatory = man.mandatory;
@@ -150,7 +177,7 @@ namespace FlappyReDovahLauncher
                 if (r != DialogResult.Yes)
                 {
                     LauncherLog.Info("Self-update: user declined");
-                    return false;
+                    return new UpdateOutcome(false, "");
                 }
             }
             else
@@ -211,7 +238,7 @@ namespace FlappyReDovahLauncher
                     CreateNoWindow = true
                 });
 
-                return true;
+                return new UpdateOutcome(true, "");   // deployed the new launcher — exit into it
             }
             finally
             {
@@ -219,42 +246,41 @@ namespace FlappyReDovahLauncher
             }
         }
 
-        private static bool PayloadHasLauncherExe(string payload)
+        /// <summary>Resolve launcher .exe name in dir (LAUNCHER_EXE_NAME / LEGACY / any *.exe). Returns "" when none.</summary>
+        private static string ResolveLauncherExe(string dir)
         {
-            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME))) return true;
-            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME_LEGACY))) return true;
-            string[] exes = Directory.GetFiles(payload, "*.exe", SearchOption.TopDirectoryOnly);
-            return exes.Length > 0;
+            if (File.Exists(Path.Combine(dir, Constants.LAUNCHER_EXE_NAME))) return Constants.LAUNCHER_EXE_NAME;
+            if (File.Exists(Path.Combine(dir, Constants.LAUNCHER_EXE_NAME_LEGACY))) return Constants.LAUNCHER_EXE_NAME_LEGACY;
+            string[] exes = Directory.GetFiles(dir, "*.exe", SearchOption.TopDirectoryOnly);
+            return exes.Length > 0 ? Path.GetFileName(exes[0]) : "";
         }
+
+        private static bool PayloadHasLauncherExe(string payload) => ResolveLauncherExe(payload) != "";
 
         private static string PickStartExeName(string payload)
         {
-            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME)))
-                return Constants.LAUNCHER_EXE_NAME;
-            if (File.Exists(Path.Combine(payload, Constants.LAUNCHER_EXE_NAME_LEGACY)))
-                return Constants.LAUNCHER_EXE_NAME_LEGACY;
+            string exe = ResolveLauncherExe(payload);
+            if (exe != "") return exe;
+
             string running = Path.GetFileName(System.Windows.Forms.Application.ExecutablePath);
-            if (File.Exists(Path.Combine(payload, running)))
-                return running;
+            if (File.Exists(Path.Combine(payload, running))) return running;
+
             string[] exes = Directory.GetFiles(payload, "*.exe", SearchOption.TopDirectoryOnly);
-            if (exes.Length > 0)
-                return Path.GetFileName(exes[0]);
-            return Constants.LAUNCHER_EXE_NAME;
+            return exes.Length > 0 ? Path.GetFileName(exes[0]) : Constants.LAUNCHER_EXE_NAME;
         }
 
         private static string ResolvePayloadRoot(string extractDir)
         {
-            if (PayloadHasLauncherExe(extractDir)) return extractDir;
+            if (ResolveLauncherExe(extractDir) != "") return extractDir;
 
             string[] dirs = Directory.GetDirectories(extractDir);
             foreach (var d in dirs)
             {
-                if (PayloadHasLauncherExe(d)) return d;
+                if (ResolveLauncherExe(d) != "") return d;
             }
             if (dirs.Length == 1)
             {
-                string[] exes = Directory.GetFiles(dirs[0], "*.exe", SearchOption.TopDirectoryOnly);
-                if (exes.Length > 0) return dirs[0];
+                if (ResolveLauncherExe(dirs[0]) != "") return dirs[0];
             }
             return extractDir;
         }
@@ -301,8 +327,7 @@ namespace FlappyReDovahLauncher
 
         private static LauncherVersionManifest ParseManifest(string json)
         {
-            var ser = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024 };
-            return ser.Deserialize<LauncherVersionManifest>(json);
+            return JsonAdapter.FromJson<LauncherVersionManifest>(json);
         }
 
         private static string ResolvePackageUrl(string urlOrRelative)
@@ -319,22 +344,42 @@ namespace FlappyReDovahLauncher
 
         public static Version GetLocalVersion()
         {
-            try
+            if (!_localVersionResolved)
             {
-                var asm = Assembly.GetExecutingAssembly();
-                var fvi = FileVersionInfo.GetVersionInfo(asm.Location);
-                if (!string.IsNullOrEmpty(fvi.FileVersion))
+                _localVersionResolved = true;
+                try
                 {
-                    Version v;
-                    if (Version.TryParse(NormalizeVersion(fvi.FileVersion), out v))
-                        return v;
+                    string exePath = Environment.ProcessPath;
+                    if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
+                    {
+                        var fvi = FileVersionInfo.GetVersionInfo(exePath);
+                        if (!string.IsNullOrEmpty(fvi.FileVersion))
+                        {
+                            Version v;
+                            if (Version.TryParse(NormalizeVersion(fvi.FileVersion), out v))
+                                return _localVersion = v;
+                        }
+                    }
+
+                    var asm = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
+                    if (!string.IsNullOrEmpty(asm.Location) && File.Exists(asm.Location))
+                    {
+                        var fvi = FileVersionInfo.GetVersionInfo(asm.Location);
+                        if (!string.IsNullOrEmpty(fvi.FileVersion))
+                        {
+                            Version v;
+                            if (Version.TryParse(NormalizeVersion(fvi.FileVersion), out v))
+                                return _localVersion = v;
+                        }
+                    }
+                    _localVersion = asm.GetName().Version ?? new Version(0, 0, 0, 0);
                 }
-                return asm.GetName().Version ?? new Version(0, 0, 0, 0);
+                catch
+                {
+                    _localVersion = new Version(0, 0, 0, 0);
+                }
             }
-            catch
-            {
-                return new Version(0, 0, 0, 0);
-            }
+            return _localVersion;
         }
 
         private static string NormalizeVersion(string v)

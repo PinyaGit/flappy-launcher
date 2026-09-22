@@ -39,7 +39,7 @@ namespace FlappyReDovahLauncher
             };
             var c = new HttpClient(handler);
             c.Timeout = TimeSpan.FromHours(6);
-            c.DefaultRequestHeaders.UserAgent.ParseAdd("FlappyLauncher/0.0.9");
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("FlappyLauncher/0.1.6");
             c.DefaultRequestHeaders.ConnectionClose = false;
             return c;
         }
@@ -57,7 +57,29 @@ namespace FlappyReDovahLauncher
             {
                 try
                 {
-                    return Http.GetStringAsync(urlOrPath).GetAwaiter().GetResult();
+                    using (var req = new HttpRequestMessage(HttpMethod.Get, urlOrPath))
+                    {
+                        AccessGate.Attach(req, urlOrPath);
+                        using (var resp = Http.SendAsync(req).GetAwaiter().GetResult())
+                        {
+                            if (resp.StatusCode == HttpStatusCode.Unauthorized
+                                || resp.StatusCode == HttpStatusCode.Forbidden)
+                            {
+                                throw new FlappyException(Loc.T("access_needed") + "\n" + urlOrPath);
+                            }
+                            if (!resp.IsSuccessStatusCode)
+                            {
+                                throw new FlappyException(
+                                    "Cannot download index from CDN:\n" + urlOrPath
+                                    + "\n\nHTTP " + (int)resp.StatusCode + " " + resp.StatusCode);
+                            }
+                            return resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        }
+                    }
+                }
+                catch (FlappyException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -371,6 +393,7 @@ namespace FlappyReDovahLauncher
         {
             using (var req = new HttpRequestMessage(HttpMethod.Get, url))
             {
+                AccessGate.Attach(req, url);
                 if (rangeStart > 0 || rangeEnd.HasValue)
                 {
                     if (rangeEnd.HasValue)
@@ -387,6 +410,11 @@ namespace FlappyReDovahLauncher
                         LauncherLog.Warn("Server ignored Range, restarting full download: " + url);
                         try { if (File.Exists(dest)) File.Delete(dest); } catch { }
                         rangeStart = 0;
+                    }
+                    else if (resp.StatusCode == HttpStatusCode.Unauthorized
+                        || resp.StatusCode == HttpStatusCode.Forbidden)
+                    {
+                        throw new FlappyException(Loc.T("access_needed") + "\n" + url);
                     }
                     else if (!resp.IsSuccessStatusCode && resp.StatusCode != HttpStatusCode.PartialContent)
                     {
@@ -471,20 +499,26 @@ namespace FlappyReDovahLauncher
                 Directory.CreateDirectory(dir);
 
             using (var req = new HttpRequestMessage(HttpMethod.Get, url))
-            using (var resp = Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel).GetAwaiter().GetResult())
             {
-                if (!resp.IsSuccessStatusCode)
-                    throw new FlappyException(
-                        "Download failed (" + (int)resp.StatusCode + " " + resp.StatusCode + "):\n" + url);
-                using (var net = resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult())
-                using (var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.SequentialScan))
+                AccessGate.Attach(req, url);
+                using (var resp = Http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cancel).GetAwaiter().GetResult())
                 {
-                    byte[] buffer = new byte[64 * 1024];
-                    int read;
-                    while ((read = net.Read(buffer, 0, buffer.Length)) > 0)
+                    if (resp.StatusCode == HttpStatusCode.Unauthorized
+                        || resp.StatusCode == HttpStatusCode.Forbidden)
+                        throw new FlappyException(Loc.T("access_needed") + "\n" + url);
+                    if (!resp.IsSuccessStatusCode)
+                        throw new FlappyException(
+                            "Download failed (" + (int)resp.StatusCode + " " + resp.StatusCode + "):\n" + url);
+                    using (var net = resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult())
+                    using (var file = new FileStream(dest, FileMode.Create, FileAccess.Write, FileShare.None, 64 * 1024, FileOptions.SequentialScan))
                     {
-                        cancel.ThrowIfCancellationRequested();
-                        file.Write(buffer, 0, read);
+                        byte[] buffer = new byte[64 * 1024];
+                        int read;
+                        while ((read = net.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            cancel.ThrowIfCancellationRequested();
+                            file.Write(buffer, 0, read);
+                        }
                     }
                 }
             }

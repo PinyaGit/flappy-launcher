@@ -1,9 +1,67 @@
-﻿bin/
-obj/
+## Build
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]uild/
+bld/
+[Ll]og/
+[Ll]ogs/
+
+## VS
 .vs/
-Publish/
-**/download_cache/
-*.pdb
-launcher.log
 *.user
-*.local.bat
+*.userosscache
+*.suo
+*.userprefs
+*.sln.docstates
+*.rsuser
+
+## Publish / local test artifacts
+Publish/
+publish/
+*.application
+*.exe.manifest
+app.publish/
+
+## NuGet (none required currently)
+packages/
+*.nupkg
+
+## Secrets / certs (never commit)
+*.pfx
+*.p12
+*.key
+*.pem
+local_version.txt
+download_cache/
+
+## OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+## Local CDN / game install next to exe (if tested from repo)
+Flappy Re-Dovah/
+**/Flappy Re-Dovah/
+**/download_cache/
+local_version.txt
+**/local_version.txt
+
+## Scratch / extract leftovers
+_edge_*/
+**/_edge_*/
+
+## Root-only scratch branding copies
+/bg_LBackground.png
+/logo_*.png
+/app_icon.ico
+
+## Private deployment scripts & tools
+sync-*.bat
+tools/
+*.bak
+*.log
+build_out.txt

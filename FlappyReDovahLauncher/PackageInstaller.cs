@@ -9,7 +9,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
 using Microsoft.Win32;
 
 namespace FlappyReDovahLauncher
@@ -69,14 +68,10 @@ namespace FlappyReDovahLauncher
         /// <summary>progress(overall0-100, currentArchive0-100 or -1, statusText)</summary>
         public delegate void ProgressHandler(int overallPct, int currentPct, string message);
 
-        /// <summary>Resolved 7-Zip CLI (LocalAppData cache / Program Files / optional legacy next to exe).</summary>
+        /// <summary>Managed 7za from LocalAppData (never system 7-Zip).</summary>
         public static string SevenZipPath
         {
-            get
-            {
-                return SevenZipBootstrap.ResolvedPath
-                    ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "7za.exe");
-            }
+            get { return SevenZipBootstrap.ResolvedPath; }
         }
 
         /// <summary>Download official 7-Zip tools if missing. Safe to call repeatedly.</summary>
@@ -92,6 +87,12 @@ namespace FlappyReDovahLauncher
 
         public static bool IsInstalled()
         {
+            if (GameCatalog.Current != null && GameCatalog.Current.IsDoom)
+            {
+                return File.Exists(InstallFlagPath)
+                    && Directory.Exists(GameRootPath)
+                    && File.Exists(Path.Combine(GameRootPath, "zandronum.exe"));
+            }
             return File.Exists(InstallFlagPath)
                 && Directory.Exists(GameRootPath)
                 && File.Exists(Path.Combine(GameRootPath, "ModOrganizer.exe"))
@@ -144,8 +145,7 @@ namespace FlappyReDovahLauncher
 
         private static Index DeserializeIndex(string json)
         {
-            var ser = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
-            var idx = ser.Deserialize<Index>(json);
+            var idx = JsonAdapter.FromJson<Index>(json);
             if (idx == null || idx.units == null)
                 throw new FlappyException("index.json is empty or invalid.");
             return idx;
@@ -295,10 +295,11 @@ namespace FlappyReDovahLauncher
                 if (progress != null)
                     progress(1, -1, Loc.F("checking_n", DisplayName(unit)));
 
+                if (IsInstallOnceUnit(unit) && DestLooksPresent(unit))
+                    continue;
                 if (IsUserDataUnit(unit))
                 {
-                    string dest = ResolveExtractDir(unit);
-                    if (!Directory.Exists(dest) || Directory.GetFileSystemEntries(dest).Length == 0)
+                    if (ProfileNeedsOverlay(unit))
                         work.Add(unit);
                     continue;
                 }
@@ -370,7 +371,7 @@ namespace FlappyReDovahLauncher
                 progress(ClampPct(i * 90.0 / Math.Max(1, total)), -1, Loc.F("removing_vr", rel));
                 if (Directory.Exists(dest))
                 {
-                    try { Directory.Delete(dest, true); }
+                    try { DeleteDirectoryRobust(dest); }
                     catch (Exception ex)
                     {
                         throw new FlappyException(
@@ -391,7 +392,7 @@ namespace FlappyReDovahLauncher
                     if (leaf.IndexOf("(VR)", StringComparison.OrdinalIgnoreCase) >= 0 ||
                         leaf.IndexOf("Re-Dovah VR", StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        try { Directory.Delete(dir, true); }
+                        try { DeleteDirectoryRobust(dir); }
                         catch (Exception ex) { LauncherLog.Warn("remove VR mod " + leaf + ": " + ex.Message); }
                     }
                 }
@@ -417,7 +418,7 @@ namespace FlappyReDovahLauncher
             try
             {
                 if (Directory.Exists(root))
-                    Directory.Delete(root, true);
+                    DeleteDirectoryRobust(root);
             }
             catch (Exception ex)
             {
@@ -433,7 +434,7 @@ namespace FlappyReDovahLauncher
             {
                 string cache = DownloadCacheDir;
                 if (!string.IsNullOrEmpty(cache) && Directory.Exists(cache))
-                    Directory.Delete(cache, true);
+                    DeleteDirectoryRobust(cache);
             }
             catch { }
 
@@ -476,9 +477,24 @@ namespace FlappyReDovahLauncher
             }
         }
 
+        /// <summary>
+        /// Fresh install is allowed from the torrent bundle, from a per-game CDN flag,
+        /// or from <see cref="Constants.ALLOW_CDN_FRESH_INSTALL"/>.
+        /// </summary>
+        public static bool CanFreshInstall()
+        {
+            if (IsInstalled()) return true;
+            if (Constants.HasLocalPackageBundle) return true;
+            if (GameCatalog.Current != null && GameCatalog.Current.AllowCdnFreshInstall)
+                return true;
+            return Constants.ALLOW_CDN_FRESH_INSTALL;
+        }
+
         public static void InstallAll(Index index, ProgressHandler progress, CancellationToken cancel, InstallChannel channel)
         {
             bool update = IsInstalled();
+            if (!update && !CanFreshInstall())
+                throw new FlappyException(Loc.T("need_torrent"));
             InstallOrRepair(index, progress, cancel,
                 onlyMismatched: update,
                 wipeMismatched: false,
@@ -512,10 +528,12 @@ namespace FlappyReDovahLauncher
                 if (status != null)
                     status(string.Format("Checking {0}/{1}: {2}", i + 1, n, name));
 
+                if (IsInstallOnceUnit(unit) && DestLooksPresent(unit))
+                    continue;
+
                 if (IsUserDataUnit(unit))
                 {
-                    string dest = ResolveExtractDir(unit);
-                    if (!Directory.Exists(dest) || Directory.GetFileSystemEntries(dest).Length == 0)
+                    if (ProfileNeedsOverlay(unit))
                         need.Add(unit);
                     continue;
                 }
@@ -553,6 +571,11 @@ namespace FlappyReDovahLauncher
 
         public static string ComputeFolderFingerprint(string folderAbs, string folderRel)
         {
+            return ComputeFolderFingerprint(folderAbs, folderRel, false);
+        }
+
+        private static string ComputeFolderFingerprint(string folderAbs, string folderRel, bool includeMetaIni)
+        {
             if (string.IsNullOrEmpty(folderAbs) || !Directory.Exists(folderAbs))
                 return null;
 
@@ -571,7 +594,7 @@ namespace FlappyReDovahLauncher
                 catch { continue; }
 
                 string sub = f.Substring(baseLen).TrimStart('\\', '/');
-                if (IsVolatileFile(fi.Name))
+                if (IsVolatileRelPath(folderRel, sub, includeMetaIni))
                     continue;
 
                 string rel = string.IsNullOrEmpty(folderRel)
@@ -591,20 +614,26 @@ namespace FlappyReDovahLauncher
                 return false;
 
             string expected = unit.fingerprint.Trim();
-            string actual;
+            string actual = ComputeUnitFingerprint(unit);
+            if (!string.IsNullOrEmpty(actual)
+                && string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                return true;
 
+            // Older indexes hashed meta.ini; MO2 rewrites it constantly.
+            string legacy = ComputeUnitFingerprint(unit, true);
+            return !string.IsNullOrEmpty(legacy)
+                && string.Equals(legacy, expected, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ComputeUnitFingerprint(PackageUnit unit, bool includeMetaIni = false)
+        {
             if (IsRootUnit(unit))
-                actual = ComputeRootFilesFingerprint();
-            else
-            {
-                string dest = ResolveExtractDir(unit);
-                if (!Directory.Exists(dest)) return false;
-                string folderRel = (unit.path ?? "").Replace('/', '\\').TrimEnd('\\');
-                actual = ComputeFolderFingerprint(dest, folderRel);
-            }
+                return ComputeRootFilesFingerprint(includeMetaIni);
 
-            return !string.IsNullOrEmpty(actual)
-                && string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase);
+            string dest = ResolveExtractDir(unit);
+            if (!Directory.Exists(dest)) return null;
+            string folderRel = (unit.path ?? "").Replace('/', '\\').TrimEnd('\\');
+            return ComputeFolderFingerprint(dest, folderRel, includeMetaIni);
         }
 
         public static bool IsUserDataUnit(PackageUnit unit)
@@ -618,6 +647,43 @@ namespace FlappyReDovahLauncher
             return p.Equals("overwrite", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static bool IsInstallOnceUnit(PackageUnit unit)
+        {
+            if (unit == null) return false;
+            if (unit.installOnce) return true;
+            string p = (unit.path ?? "").Replace('\\', '/').Trim().Trim('/');
+            return p.Equals("StockGame", StringComparison.OrdinalIgnoreCase)
+                || p.Equals("StockGameVR", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static bool IsModUnit(PackageUnit unit)
+        {
+            if (unit == null) return false;
+            if (string.Equals(unit.kind, "MOD", StringComparison.OrdinalIgnoreCase)) return true;
+            string p = (unit.path ?? "").Replace('\\', '/').Trim().Trim('/');
+            return p.StartsWith("mods/", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool DestLooksPresent(PackageUnit unit)
+        {
+            if (unit == null) return false;
+            string dest = ResolveExtractDir(unit);
+            if (string.IsNullOrEmpty(dest) || !Directory.Exists(dest)) return false;
+            try { return Directory.GetFileSystemEntries(dest).Length > 0; }
+            catch { return true; }
+        }
+
+        private static bool ProfileNeedsOverlay(PackageUnit unit)
+        {
+            if (unit == null) return false;
+            if (!DestLooksPresent(unit)) return true;
+            string want = GetUnitStamp(unit);
+            if (string.IsNullOrEmpty(want)) return true;
+            string applied = GetAppliedSha(unit.id);
+            if (string.IsNullOrEmpty(applied)) return true;
+            return !string.Equals(applied, want, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool IsRootUnit(PackageUnit unit)
         {
             if (unit == null) return false;
@@ -625,25 +691,61 @@ namespace FlappyReDovahLauncher
             return string.IsNullOrEmpty(unit.path) || unit.path == ".";
         }
 
-        private static bool IsVolatileFile(string fileName)
+        private static bool IsVolatileFile(string fileName, bool includeMetaIni = false)
         {
             if (string.IsNullOrEmpty(fileName)) return true;
             if (Regex.IsMatch(fileName, @"\.\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")) return true;
             if (fileName.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase)) return true;
+            if (fileName.Equals("imgui.ini", StringComparison.OrdinalIgnoreCase)) return true;
+            if (!includeMetaIni && fileName.Equals("meta.ini", StringComparison.OrdinalIgnoreCase)) return true;
+            if (fileName.Equals(".flappy_empty", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.EndsWith(".bak", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return true;
+            if (fileName.EndsWith(".log", StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
 
-        private static string ComputeRootFilesFingerprint()
+        private static readonly string[] StockGameJunkDirs = { "enbcache", "default", "Profile", "Skyrim" };
+
+        private static bool IsVolatileRelPath(string folderRel, string sub, bool includeMetaIni = false)
+        {
+            if (IsVolatileFile(Path.GetFileName(sub), includeMetaIni)) return true;
+            string top = (folderRel ?? "").Replace('/', '\\').Trim('\\');
+            int slash = top.IndexOf('\\');
+            if (slash >= 0) top = top.Substring(0, slash);
+            string first = (sub ?? "").Replace('/', '\\').Trim('\\');
+            int s = first.IndexOf('\\');
+            if (s >= 0) first = first.Substring(0, s);
+            if (top.Equals("StockGame", StringComparison.OrdinalIgnoreCase) ||
+                top.Equals("StockGameVR", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (string junk in StockGameJunkDirs)
+                {
+                    if (first.Equals(junk, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+            if (top.Equals("profiles", StringComparison.OrdinalIgnoreCase) ||
+                top.StartsWith("profiles\\", StringComparison.OrdinalIgnoreCase))
+            {
+                if (first.Equals("saves", StringComparison.OrdinalIgnoreCase)) return true;
+                string ext = Path.GetExtension(sub ?? "");
+                if (ext.Equals(".ess", StringComparison.OrdinalIgnoreCase) ||
+                    ext.Equals(".skse", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        private static string ComputeRootFilesFingerprint(bool includeMetaIni = false)
         {
             if (!Directory.Exists(GameRootPath)) return null;
             var lines = new List<string>();
             foreach (string f in Directory.GetFiles(GameRootPath))
             {
                 string name = Path.GetFileName(f);
-                if (IsIgnoredRootFile(name)) continue;
+                if (IsIgnoredRootFile(name) || IsVolatileFile(name, includeMetaIni)) continue;
                 try
                 {
                     var fi = new FileInfo(f);
@@ -724,7 +826,7 @@ namespace FlappyReDovahLauncher
             {
                 FinishInstallFlag(index.version, jobName + " ok skipped=" + skipped);
                 SaveLocalVersion(index.version ?? "1.0.0");
-                try { RestoreModOrder(); } catch (Exception ex) { LauncherLog.Warn("modlist: " + ex.Message); }
+                try { RestoreModOrder(index); } catch (Exception ex) { LauncherLog.Warn("modlist: " + ex.Message); }
                 progress(100, -1, Loc.F("job_complete_ok", jobName, skipped));
                 return;
             }
@@ -756,6 +858,10 @@ namespace FlappyReDovahLauncher
                 ? Loc.F("dl_local", work.Count)
                 : Loc.F("dl_start", work.Count, Constants.DOWNLOAD_PARALLELISM));
 
+            long totalDlBytes = 0;
+            foreach (var u in work) totalDlBytes += Math.Max(0, u.packageSize);
+            long completedDlBytes = 0;
+
             Action reportUi = () =>
             {
                 long now = Environment.TickCount;
@@ -785,14 +891,20 @@ namespace FlappyReDovahLauncher
 
                 double activeFrac = 0;
                 int activeN = 0;
+                long activeRecv = 0;
                 foreach (var s in slots.Values)
                 {
                     if (s.Total > 0)
                     {
                         activeFrac += Math.Min(1.0, (double)s.Received / Math.Max(1, s.Total));
                         activeN++;
+                        activeRecv += s.Received;
                     }
-                    else if (s.Received > 0) activeN++;
+                    else if (s.Received > 0)
+                    {
+                        activeN++;
+                        activeRecv += s.Received;
+                    }
                 }
                 if (activeN > 0) activeFrac /= activeN;
                 double pct = 2 + (finished + activeFrac) / Math.Max(1.0, total) * 83.0;
@@ -806,7 +918,10 @@ namespace FlappyReDovahLauncher
                     double f = Math.Min(1.0, (double)s.Received / s.Total);
                     if (f > best) { best = f; curPct = ClampPct(f * 100.0); }
                 }
-                progress(ClampPct(pct), curPct, FormatDownloadStatus(finished, total, ema, slots.Values));
+
+                long doneBytes = Interlocked.Read(ref completedDlBytes) + activeRecv;
+                long remainingBytes = Math.Max(0, totalDlBytes - doneBytes);
+                progress(ClampPct(pct), curPct, FormatDownloadStatus(finished, total, ema, slots.Values, remainingBytes));
             };
 
             for (int w = 0; w < workers; w++)
@@ -858,6 +973,7 @@ namespace FlappyReDovahLauncher
                             downloaded[id] = local;
                             if (fromLocal) keepSource[id] = 0;
                             Interlocked.Increment(ref doneDl);
+                            Interlocked.Add(ref completedDlBytes, Math.Max(0, u.packageSize));
                             reportUi();
                             LauncherLog.Info((fromLocal ? "Local " : "CDN ") + name);
                         }
@@ -885,46 +1001,17 @@ namespace FlappyReDovahLauncher
                     first);
             }
 
-            // Extract sequentially
-            int i = 0;
-            foreach (var unit in work)
-            {
-                cancel.ThrowIfCancellationRequested();
-                i++;
-                string name = DisplayName(unit);
-                string local;
-                if (!downloaded.TryGetValue(unit.id, out local) || !File.Exists(local))
-                    throw new FlappyException("Missing downloaded package for:\n" + name);
+            ExtractUnitsParallel(
+                work,
+                downloaded,
+                keepSource,
+                wipeMismatched,
+                onlyMismatched,
+                total,
+                progress,
+                cancel);
 
-                double basePct = 85 + (i - 1) * 14.0 / total;
-
-                if (wipeMismatched && onlyMismatched && !IsUserDataUnit(unit))
-                {
-                    progress(ClampPct(basePct), -1, "Clearing:\n" + name);
-                    WipeUnitDestination(unit);
-                }
-
-                string dest = ResolveExtractDir(unit);
-                Directory.CreateDirectory(dest);
-                int extractCur = ClampPct(100.0 * i / Math.Max(1, total));
-                progress(ClampPct(basePct + 5.0 / total), extractCur, Loc.F("extracting", i, total, name));
-                Extract7z(local, dest);
-                // Never delete torrent/offline package files; only purge download_cache copies
-                string idKey = unit.id ?? ShortName(name);
-                if (!keepSource.ContainsKey(idKey))
-                {
-                    try { File.Delete(local); } catch { }
-                }
-
-                string up = (unit.path ?? "").Replace('\\', '/');
-                if (up.Equals("profiles", StringComparison.OrdinalIgnoreCase) ||
-                    up.StartsWith("profiles/", StringComparison.OrdinalIgnoreCase))
-                {
-                    try { CaptureOfficialModlists(); } catch (Exception ex) { LauncherLog.Warn("capture modlist: " + ex.Message); }
-                }
-            }
-
-            try { RestoreModOrder(); } catch (Exception ex) { LauncherLog.Warn("modlist merge: " + ex.Message); }
+            try { RestoreModOrder(index); } catch (Exception ex) { LauncherLog.Warn("modlist merge: " + ex.Message); }
 
             FinishInstallFlag(index.version, jobName + " fixed=" + total + " skipped=" + skipped);
             SaveLocalVersion(index.version ?? "1.0.0");
@@ -943,6 +1030,224 @@ namespace FlappyReDovahLauncher
                 Encoding.UTF8);
         }
 
+        /// <summary>
+        /// Extract acquired archives with up to EXTRACT_PARALLELISM 7-Zip processes.
+        /// Units whose destination folders overlap (ROOT vs anything, parent vs child) stay serialized.
+        /// </summary>
+        private static void ExtractUnitsParallel(
+            List<PackageUnit> work,
+            ConcurrentDictionary<string, string> downloaded,
+            ConcurrentDictionary<string, byte> keepSource,
+            bool wipeMismatched,
+            bool onlyMismatched,
+            int total,
+            ProgressHandler progress,
+            CancellationToken cancel)
+        {
+            int extractWorkers = Math.Max(1, Math.Min(Constants.EXTRACT_PARALLELISM, work.Count));
+            LauncherLog.Info("Extract workers=" + extractWorkers + " packages=" + work.Count);
+
+            var pending = new List<PackageUnit>(work);
+            var inflightDests = new List<string>();
+            var extractErrors = new ConcurrentQueue<Exception>();
+            var extractActive = new ConcurrentDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var extractGate = new object();
+            var uiGate = new object();
+            int extractRunning = 0;
+            int doneExtract = 0;
+            int captureProfiles = 0;
+            long lastUi = 0;
+
+            Action reportUi = () =>
+            {
+                long now = Environment.TickCount;
+                lock (uiGate)
+                {
+                    if (now - lastUi < 200 && doneExtract < total) return;
+                    lastUi = now;
+                }
+
+                int doneSnap = doneExtract;
+                var names = new List<string>();
+                foreach (var kv in extractActive)
+                    names.Add(kv.Value);
+                names.Sort(StringComparer.OrdinalIgnoreCase);
+                string shown = names.Count == 0 ? "…" : string.Join(" · ", names);
+                int seq = Math.Min(total, Math.Max(1, doneSnap + names.Count));
+                double pct = 85 + 14.0 * doneSnap / Math.Max(1, total);
+                int extractCur = ClampPct(100.0 * seq / Math.Max(1, total));
+                progress(ClampPct(pct), extractCur, Loc.F("extracting", seq, total, shown));
+            };
+
+            Action<PackageUnit> extractOne = unit =>
+            {
+                string name = DisplayName(unit);
+                string destKey = NormalizeExtractDest(unit);
+                try
+                {
+                    cancel.ThrowIfCancellationRequested();
+                    string local;
+                    if (!downloaded.TryGetValue(unit.id, out local) || !File.Exists(local))
+                        throw new FlappyException("Missing downloaded package for:\n" + name);
+
+                    if (wipeMismatched && onlyMismatched && !IsUserDataUnit(unit) && !IsInstallOnceUnit(unit))
+                    {
+                        progress(ClampPct(85), -1, "Clearing:\n" + name);
+                        WipeUnitDestination(unit);
+                    }
+
+                    string dest = ResolveExtractDir(unit);
+                    Directory.CreateDirectory(dest);
+
+                    bool overlayProfile = IsUserDataUnit(unit) && DestLooksPresent(unit);
+                    if (overlayProfile)
+                        OverlayProfileArchive(local, dest);
+                    else if (IsModUnit(unit))
+                        Extract7zAtomic(local, dest);
+                    else
+                        Extract7z(local, dest);
+
+                    if (IsModUnit(unit))
+                    {
+                        try { SyncDeleteExtraFiles(unit, dest, local); }
+                        catch (Exception ex) { LauncherLog.Warn("sync-delete " + name + ": " + ex.Message); }
+                    }
+
+                    string idKey = unit.id ?? ShortName(name);
+                    if (!keepSource.ContainsKey(idKey))
+                    {
+                        try { File.Delete(local); } catch { }
+                    }
+
+                    if (IsUserDataUnit(unit))
+                        Interlocked.Exchange(ref captureProfiles, 1);
+
+                    try { StampApplied(unit); }
+                    catch (Exception ex) { LauncherLog.Warn("applied stamp: " + ex.Message); }
+                }
+                catch (Exception ex)
+                {
+                    extractErrors.Enqueue(ex);
+                    LauncherLog.Error("extract " + name, ex);
+                }
+                finally
+                {
+                    string removed;
+                    extractActive.TryRemove(unit.id ?? name, out removed);
+                    lock (extractGate)
+                    {
+                        extractRunning--;
+                        inflightDests.Remove(destKey);
+                        doneExtract++;
+                        Monitor.PulseAll(extractGate);
+                    }
+                    reportUi();
+                }
+            };
+
+            while (true)
+            {
+                PackageUnit toStart = null;
+                lock (extractGate)
+                {
+                    while (toStart == null)
+                    {
+                        if (extractRunning == 0 && (pending.Count == 0 || !extractErrors.IsEmpty))
+                            break;
+
+                        if (cancel.IsCancellationRequested)
+                        {
+                            if (extractRunning == 0) break;
+                            Monitor.Wait(extractGate, 250);
+                            continue;
+                        }
+
+                        if (!extractErrors.IsEmpty)
+                        {
+                            if (extractRunning == 0) break;
+                            Monitor.Wait(extractGate, 250);
+                            continue;
+                        }
+
+                        if (extractRunning < extractWorkers)
+                        {
+                            for (int i = 0; i < pending.Count; i++)
+                            {
+                                string destKey = NormalizeExtractDest(pending[i]);
+                                bool conflict = false;
+                                for (int d = 0; d < inflightDests.Count; d++)
+                                {
+                                    if (ExtractDestinationsOverlap(destKey, inflightDests[d]))
+                                    {
+                                        conflict = true;
+                                        break;
+                                    }
+                                }
+                                if (conflict) continue;
+
+                                toStart = pending[i];
+                                pending.RemoveAt(i);
+                                inflightDests.Add(destKey);
+                                extractRunning++;
+                                string nm = DisplayName(toStart);
+                                extractActive[toStart.id ?? nm] = ShortName(nm);
+                                break;
+                            }
+                        }
+
+                        if (toStart != null) break;
+                        Monitor.Wait(extractGate, 250);
+                    }
+                }
+
+                if (toStart != null)
+                {
+                    PackageUnit captured = toStart;
+                    Task.Factory.StartNew(
+                        () => extractOne(captured),
+                        CancellationToken.None,
+                        TaskCreationOptions.LongRunning,
+                        TaskScheduler.Default);
+                    reportUi();
+                    continue;
+                }
+
+                break;
+            }
+
+            cancel.ThrowIfCancellationRequested();
+
+            if (!extractErrors.IsEmpty)
+            {
+                Exception first;
+                extractErrors.TryPeek(out first);
+                if (first is OperationCanceledException)
+                    throw (OperationCanceledException)first;
+                throw new FlappyException(
+                    FlappyException.FormatForUser(first) + "\n\nSee launcher.log for details.",
+                    first != null ? first.ToString() : null,
+                    first);
+            }
+
+            if (captureProfiles != 0)
+            {
+                try { CaptureOfficialModlists(); }
+                catch (Exception ex) { LauncherLog.Warn("capture modlist: " + ex.Message); }
+            }
+        }
+
+        private static string NormalizeExtractDest(PackageUnit unit)
+        {
+            return Path.GetFullPath(ResolveExtractDir(unit)).TrimEnd('\\', '/') + "\\";
+        }
+
+        private static bool ExtractDestinationsOverlap(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return true;
+            return a.StartsWith(b, StringComparison.OrdinalIgnoreCase)
+                || b.StartsWith(a, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static void WipeUnitDestination(PackageUnit unit)
         {
             if (IsRootUnit(unit)) return;
@@ -956,12 +1261,59 @@ namespace FlappyReDovahLauncher
                 return;
             if (Directory.Exists(dest))
             {
-                try { Directory.Delete(dest, true); }
+                try { DeleteDirectoryRobust(dest); }
                 catch (Exception ex)
                 {
                     throw new FlappyException("Cannot clear folder:\n" + dest + "\n\nClose MO2/game and retry.", ex.ToString(), ex);
                 }
             }
+        }
+
+        /// <summary>
+        /// Recursive delete that first drops ReadOnly (git objects in Tools\Synthesis\.git, etc.).
+        /// .NET Directory.Delete(recursive) throws UnauthorizedAccessException on those files.
+        /// </summary>
+        private static void DeleteDirectoryRobust(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !Directory.Exists(path))
+                return;
+            Exception last = null;
+            for (int attempt = 0; attempt < 4; attempt++)
+            {
+                try
+                {
+                    ClearReadOnlyTree(path);
+                    Directory.Delete(path, true);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    last = ex;
+                    Thread.Sleep(150 * (attempt + 1));
+                }
+            }
+            throw last ?? new IOException("Cannot delete: " + path);
+        }
+
+        private static void ClearReadOnlyTree(string path)
+        {
+            var root = new DirectoryInfo(path);
+            if (!root.Exists) return;
+            StripReadOnly(root);
+            FileSystemInfo[] entries;
+            try { entries = root.GetFileSystemInfos("*", SearchOption.AllDirectories); }
+            catch { return; }
+            foreach (var e in entries)
+                StripReadOnly(e);
+        }
+
+        private static void StripReadOnly(FileSystemInfo info)
+        {
+            try
+            {
+                info.Attributes &= ~(FileAttributes.ReadOnly | FileAttributes.Hidden | FileAttributes.System);
+            }
+            catch { }
         }
 
         public static string ResolveExtractDir(PackageUnit unit)
@@ -987,15 +1339,21 @@ namespace FlappyReDovahLauncher
                     Path.GetFileName(archive) + "\n\nRetry install — it will re-download.");
             }
 
+            string sevenZip = SevenZipPath;
+            if (string.IsNullOrEmpty(sevenZip) || !File.Exists(sevenZip))
+                sevenZip = SevenZipBootstrap.Ensure(null, CancellationToken.None);
+
             var psi = new ProcessStartInfo
             {
-                FileName = SevenZipPath,
+                FileName = sevenZip,
+                WorkingDirectory = Path.GetDirectoryName(sevenZip),
                 Arguments = string.Format("x -y -aoa \"-o{0}\" -- \"{1}\"", destDir, archive),
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true
             };
+            psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(sevenZip) + ";" + Environment.GetFolderPath(Environment.SpecialFolder.System);
             using (var p = Process.Start(psi))
             {
                 if (p == null)
@@ -1018,7 +1376,122 @@ namespace FlappyReDovahLauncher
             }
         }
 
+        private static void Extract7zAtomic(string archive, string destDir)
+        {
+            string parent = Path.GetDirectoryName(destDir);
+            if (!string.IsNullOrEmpty(parent)) Directory.CreateDirectory(parent);
+
+            string tmp = destDir + "_tmp_" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            if (Directory.Exists(tmp))
+            {
+                try { DeleteDirectoryRobust(tmp); } catch { }
+            }
+
+            try
+            {
+                Extract7z(archive, tmp);
+                if (Directory.Exists(destDir))
+                {
+                    DeleteDirectoryRobust(destDir);
+                }
+                Directory.Move(tmp, destDir);
+            }
+            catch
+            {
+                try { if (Directory.Exists(tmp)) DeleteDirectoryRobust(tmp); } catch { }
+                throw;
+            }
+        }
+
+        public static int ClearShaderCache()
+        {
+            int count = 0;
+            string root = GameRootPath;
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root)) return 0;
+
+            string[] junkDirs = {
+                Path.Combine(root, "enbcache"),
+                Path.Combine(root, "ShaderCache"),
+                Path.Combine(root, "StockGame", "enbcache"),
+                Path.Combine(root, "StockGame", "ShaderCache"),
+                Path.Combine(root, "StockGameVR", "enbcache"),
+                Path.Combine(root, "StockGameVR", "ShaderCache")
+            };
+
+            foreach (var d in junkDirs)
+            {
+                if (Directory.Exists(d))
+                {
+                    try { DeleteDirectoryRobust(d); count++; } catch { }
+                }
+            }
+            LauncherLog.Info("ClearShaderCache removed dirs: " + count);
+            return count;
+        }
+
+        /// <summary>
+        /// Overlay a profile archive onto an existing profile: copy packed files except saves.
+        /// Client saves stay. Official modlist/plugins/loadorder come from the archive.
+        /// </summary>
+        private static void OverlayProfileArchive(string archive, string destDir)
+        {
+            string tmp = Path.Combine(Path.GetTempPath(), "flappy_profile_" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Extract7z(archive, tmp);
+                string tmpRoot = Path.GetFullPath(tmp).TrimEnd('\\');
+                int baseLen = tmpRoot.Length;
+                string[] files;
+                try { files = Directory.GetFiles(tmpRoot, "*", SearchOption.AllDirectories); }
+                catch { return; }
+                int copied = 0;
+                foreach (string f in files)
+                {
+                    string rel = f.Substring(baseLen).TrimStart('\\', '/');
+                    if (IsProfileSavePath(rel)) continue;
+                    string target = Path.Combine(destDir, rel);
+                    string parent = Path.GetDirectoryName(target);
+                    if (!string.IsNullOrEmpty(parent))
+                        Directory.CreateDirectory(parent);
+                    File.Copy(f, target, true);
+                    copied++;
+                }
+                LauncherLog.Info("profile overlay files=" + copied + " dest=" + destDir);
+            }
+            finally
+            {
+                try { if (Directory.Exists(tmp)) DeleteDirectoryRobust(tmp); } catch { }
+            }
+        }
+
+        private static bool IsProfileSavePath(string rel)
+        {
+            if (string.IsNullOrEmpty(rel)) return false;
+            string n = rel.Replace('/', '\\').TrimStart('\\');
+            if (n.StartsWith("saves\\", StringComparison.OrdinalIgnoreCase) ||
+                n.Equals("saves", StringComparison.OrdinalIgnoreCase))
+                return true;
+            string ext = Path.GetExtension(n);
+            return ext.Equals(".ess", StringComparison.OrdinalIgnoreCase)
+                || ext.Equals(".skse", StringComparison.OrdinalIgnoreCase);
+        }
+
         // ---------- modlist restore ----------
+
+        private static readonly string[] OfficialOrderFiles =
+        {
+            "modlist.txt", "plugins.txt", "loadorder.txt", "lockedorder.txt", "archives.txt"
+        };
+
+        public static string OfficialOrderDir
+        {
+            get { return Path.Combine(OfficialModlistDir, "official"); }
+        }
+
+        public static string AppliedStatePath
+        {
+            get { return Path.Combine(OfficialModlistDir, "applied.json"); }
+        }
 
         public static void CaptureOfficialModlists()
         {
@@ -1027,94 +1500,546 @@ namespace FlappyReDovahLauncher
             if (!Directory.Exists(profiles)) return;
             foreach (var dir in Directory.GetDirectories(profiles))
             {
-                string ml = Path.Combine(dir, "modlist.txt");
-                if (!File.Exists(ml)) continue;
                 string name = Path.GetFileName(dir);
-                string key = name.IndexOf("VR", StringComparison.OrdinalIgnoreCase) >= 0 ? "modlist_VR.txt" : "modlist_AE.txt";
-                File.Copy(ml, Path.Combine(OfficialModlistDir, key), true);
+                string snap = Path.Combine(OfficialOrderDir, name);
+                Directory.CreateDirectory(snap);
+                foreach (string file in OfficialOrderFiles)
+                {
+                    string src = Path.Combine(dir, file);
+                    if (File.Exists(src))
+                        File.Copy(src, Path.Combine(snap, file), true);
+                }
+            }
+        }
+
+        public static HashSet<string> GetOfficialModNames(Index index)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (index == null || index.units == null) return set;
+            foreach (var u in index.units)
+            {
+                if (IsModUnit(u))
+                {
+                    string p = (u.path ?? "").Replace('\\', '/').Trim().Trim('/');
+                    if (p.StartsWith("mods/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string modName = p.Substring(5).Trim();
+                        if (!string.IsNullOrEmpty(modName))
+                            set.Add(modName);
+                    }
+                }
+            }
+            return set;
+        }
+
+        public static void RestoreModOrder()
+        {
+            RestoreModOrder(null);
+        }
+
+        /// <summary>
+        /// Overlay official modlist / plugins / loadorder onto every profile.
+        /// Client list and order must match the packed pack. Saves are not touched.
+        /// Extra folders in mods\ are moved out so MO2 does not append them disabled.
+        /// User-installed mods → UserMods next to the launcher. Pack-removed mods are deleted.
+        /// </summary>
+        public static void RestoreModOrder(Index index)
+        {
+            string profiles = Path.Combine(GameRootPath, "profiles");
+            if (!Directory.Exists(profiles)) return;
+
+            // Ensure initial official snapshot exists if missing
+            if (!Directory.Exists(OfficialOrderDir) || Directory.GetDirectories(OfficialOrderDir).Length == 0)
+            {
+                try { CaptureOfficialModlists(); } catch { }
+            }
+
+            var lastOfficial = LoadOfficialNames();
+            HashSet<string> newOfficial = null;
+            if (index != null && index.units != null)
+            {
+                newOfficial = GetOfficialModNames(index);
+            }
+
+            // Fallback if index wasn't provided or had 0 mods: parse from official snapshots
+            if (newOfficial == null || newOfficial.Count == 0)
+            {
+                newOfficial = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var profileDir in Directory.GetDirectories(profiles))
+                {
+                    string profileName = Path.GetFileName(profileDir);
+                    string snap = Path.Combine(OfficialOrderDir, profileName);
+                    if (Directory.Exists(snap))
+                    {
+                        foreach (string n in ParseModlistNames(Path.Combine(snap, "modlist.txt")))
+                            newOfficial.Add(n);
+                    }
+                }
+            }
+
+            // Apply official order files onto each profile
+            foreach (var profileDir in Directory.GetDirectories(profiles))
+            {
+                string profileName = Path.GetFileName(profileDir);
+                string snap = Path.Combine(OfficialOrderDir, profileName);
+                if (!Directory.Exists(snap))
+                    continue;
+
+                int copied = 0;
+                foreach (string file in OfficialOrderFiles)
+                {
+                    string src = Path.Combine(snap, file);
+                    if (!File.Exists(src)) continue;
+                    File.Copy(src, Path.Combine(profileDir, file), true);
+                    copied++;
+                }
+                if (copied > 0)
+                    LauncherLog.Info("official order applied: " + profileName + " files=" + copied);
+            }
+
+            if (newOfficial != null && newOfficial.Count > 0)
+            {
+                QuarantineExtraMods(lastOfficial, newOfficial);
+                CleanProfilesModlists(newOfficial);
+                SaveOfficialNames(newOfficial);
+            }
+        }
+
+        private static void CleanProfilesModlists(HashSet<string> officialMods)
+        {
+            if (officialMods == null || officialMods.Count == 0) return;
+            string profilesDir = Path.Combine(GameRootPath, "profiles");
+            if (!Directory.Exists(profilesDir)) return;
+
+            CleanModlistInDirectory(profilesDir, officialMods);
+            if (Directory.Exists(OfficialOrderDir))
+            {
+                CleanModlistInDirectory(OfficialOrderDir, officialMods);
+            }
+        }
+
+        private static void CleanModlistInDirectory(string baseDir, HashSet<string> officialMods)
+        {
+            foreach (var profileDir in Directory.GetDirectories(baseDir))
+            {
+                string modlistPath = Path.Combine(profileDir, "modlist.txt");
+                if (!File.Exists(modlistPath)) continue;
+
+                try
+                {
+                    var lines = File.ReadAllLines(modlistPath);
+                    var cleanLines = new List<string>(lines.Length);
+                    int removed = 0;
+
+                    foreach (var raw in lines)
+                    {
+                        string line = (raw ?? "").Trim();
+                        if (line.Length == 0 || line.StartsWith("#"))
+                        {
+                            cleanLines.Add(raw);
+                            continue;
+                        }
+
+                        string entry = line;
+                        if (entry.StartsWith("+") || entry.StartsWith("-"))
+                            entry = entry.Substring(1).Trim();
+
+                        bool isSeparator = entry.EndsWith("_separator", StringComparison.OrdinalIgnoreCase);
+                        if (isSeparator || officialMods.Contains(entry))
+                        {
+                            cleanLines.Add(raw);
+                        }
+                        else
+                        {
+                            removed++;
+                        }
+                    }
+
+                    if (removed > 0)
+                    {
+                        File.WriteAllLines(modlistPath, cleanLines.ToArray(), new UTF8Encoding(false));
+                        LauncherLog.Info("cleaned profile modlist: " + Path.GetFileName(profileDir) + " removed_obsolete=" + removed);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LauncherLog.Warn("clean modlist.txt (" + Path.GetFileName(profileDir) + "): " + ex.Message);
+                }
+            }
+        }
+
+        /// <summary>MO2 folder names from modlist.txt (+/- prefix stripped).</summary>
+        private static HashSet<string> ParseModlistNames(string modlistPath)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!File.Exists(modlistPath)) return set;
+            foreach (string raw in File.ReadAllLines(modlistPath))
+            {
+                string line = (raw ?? "").Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                if (line[0] == '+' || line[0] == '-')
+                    line = line.Substring(1).Trim();
+                if (line.Length > 0) set.Add(line);
+            }
+            return set;
+        }
+
+        private static string OfficialNamesPath
+        {
+            get { return Path.Combine(OfficialModlistDir, "official-names.txt"); }
+        }
+
+        private static HashSet<string> LoadOfficialNames()
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(OfficialNamesPath)) return set;
+                foreach (string raw in File.ReadAllLines(OfficialNamesPath))
+                {
+                    string n = (raw ?? "").Trim();
+                    if (n.Length > 0) set.Add(n);
+                }
+            }
+            catch (Exception ex) { LauncherLog.Warn("official-names read: " + ex.Message); }
+            return set;
+        }
+
+        private static void SaveOfficialNames(HashSet<string> names)
+        {
+            try
+            {
+                Directory.CreateDirectory(OfficialModlistDir);
+                var list = new List<string>(names);
+                list.Sort(StringComparer.OrdinalIgnoreCase);
+                File.WriteAllLines(OfficialNamesPath, list.ToArray(), new UTF8Encoding(false));
+            }
+            catch (Exception ex) { LauncherLog.Warn("official-names write: " + ex.Message); }
+        }
+
+        public static string UserModsDir
+        {
+            get
+            {
+                return Path.Combine(
+                    AppDomain.CurrentDomain.BaseDirectory,
+                    "UserMods",
+                    GameCatalog.Current.InstallFolderName ?? GameCatalog.Current.Id);
             }
         }
 
         /// <summary>
-        /// Restore official mod order; append user-added mods at the end (enabled).
+        /// Folders in mods\ that are not on the new official list would be auto-appended
+        /// by MO2 as disabled. User mods go next to the launcher. Pack-removed mods are deleted.
         /// </summary>
-        public static void RestoreModOrder()
+        private static void QuarantineExtraMods(HashSet<string> lastOfficial, HashSet<string> newOfficial)
         {
-            string modsRoot = Path.Combine(GameRootPath, "mods");
-            if (!Directory.Exists(modsRoot)) return;
+            string modsDir = Path.Combine(GameRootPath, "mods");
+            if (!Directory.Exists(modsDir)) return;
+            if (newOfficial == null || newOfficial.Count == 0) return;
 
-            var installed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var d in Directory.GetDirectories(modsRoot))
-                installed.Add(Path.GetFileName(d));
-
-            string profiles = Path.Combine(GameRootPath, "profiles");
-            if (!Directory.Exists(profiles)) return;
-
-            foreach (var profileDir in Directory.GetDirectories(profiles))
+            int userMoved = 0, packDeleted = 0;
+            foreach (string dir in Directory.GetDirectories(modsDir))
             {
-                string profileName = Path.GetFileName(profileDir);
-                bool isVr = profileName.IndexOf("VR", StringComparison.OrdinalIgnoreCase) >= 0;
-                string officialPath = Path.Combine(OfficialModlistDir, isVr ? "modlist_VR.txt" : "modlist_AE.txt");
-                string currentPath = Path.Combine(profileDir, "modlist.txt");
-
-                List<string> officialLines = null;
-                if (File.Exists(officialPath))
-                    officialLines = new List<string>(File.ReadAllLines(officialPath, Encoding.UTF8));
-                else if (File.Exists(currentPath))
-                    officialLines = new List<string>(File.ReadAllLines(currentPath, Encoding.UTF8));
-                else
+                string name = Path.GetFileName(dir);
+                if (string.IsNullOrEmpty(name) || newOfficial.Contains(name))
                     continue;
 
-                var ordered = new List<string>();
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-                foreach (string raw in officialLines)
+                bool wasOfficial = lastOfficial != null && lastOfficial.Contains(name);
+                try
                 {
-                    string line = raw.TrimEnd('\r');
-                    if (string.IsNullOrWhiteSpace(line)) continue;
-                    string mod = ParseModlistName(line);
-                    if (mod == null) { ordered.Add(line); continue; }
-                    if (!installed.Contains(mod)) continue; // removed
-                    if (seen.Add(mod))
-                        ordered.Add(line.StartsWith("+") || line.StartsWith("-") ? line : ("+" + mod));
+                    if (wasOfficial)
+                    {
+                        DeleteDirectoryRobust(dir);
+                        packDeleted++;
+                        LauncherLog.Info("pack-removed deleted: " + name);
+                    }
+                    else
+                    {
+                        Directory.CreateDirectory(UserModsDir);
+                        string dest = UniqueDest(UserModsDir, name);
+                        MoveDirectory(dir, dest);
+                        userMoved++;
+                        LauncherLog.Info("user-mod " + name + " -> " + dest);
+                    }
                 }
-
-                // User mods: installed but not in official
-                foreach (string mod in installed.OrderBy(s => s, StringComparer.OrdinalIgnoreCase))
+                catch (Exception ex)
                 {
-                    if (seen.Contains(mod)) continue;
-                    ordered.Add("+" + mod);
-                    seen.Add(mod);
+                    LauncherLog.Warn("quarantine " + name + ": " + ex.Message);
                 }
+            }
 
-                File.WriteAllLines(currentPath, ordered, new UTF8Encoding(false));
-                LauncherLog.Info("modlist restored: " + profileName + " lines=" + ordered.Count);
+            if (userMoved > 0)
+            {
+                TryWriteReadme(UserModsDir,
+                    "Пользовательские моды, установленные вручную.\r\n\r\n" +
+                    "Лаунчер переместил их сюда при обновлении/починке игры, чтобы они не ломали порядок модов и не вызывали вылетов в Mod Organizer 2.\r\n" +
+                    "Если вам нужен какой-то из этих модов, скопируйте его папку обратно в директорию mods\\ игры после завершения обновления.\r\n");
+            }
+
+            if (userMoved + packDeleted > 0)
+                LauncherLog.Info("quarantine user=" + userMoved + " pack-removed-deleted=" + packDeleted);
+        }
+
+        private static string UniqueDest(string root, string name)
+        {
+            string dest = Path.Combine(root, name);
+            if (!Directory.Exists(dest) && !File.Exists(dest)) return dest;
+            return Path.Combine(root, name + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
+        }
+
+        private static void MoveDirectory(string src, string dest)
+        {
+            try
+            {
+                Directory.Move(src, dest);
+            }
+            catch (IOException)
+            {
+                CopyDirectory(src, dest);
+                DeleteDirectoryRobust(src);
             }
         }
 
-        private static string ParseModlistName(string line)
+        private static void CopyDirectory(string src, string dest)
         {
-            if (string.IsNullOrEmpty(line)) return null;
-            line = line.Trim();
-            if (line.StartsWith("#")) return null;
-            if (line.StartsWith("+") || line.StartsWith("-"))
-                return line.Substring(1).Trim();
-            return line;
+            Directory.CreateDirectory(dest);
+            foreach (string file in Directory.GetFiles(src))
+                File.Copy(file, Path.Combine(dest, Path.GetFileName(file)), true);
+            foreach (string sub in Directory.GetDirectories(src))
+                CopyDirectory(sub, Path.Combine(dest, Path.GetFileName(sub)));
+        }
+
+        private static void TryWriteReadme(string dir, string text)
+        {
+            try
+            {
+                if (!Directory.Exists(dir)) return;
+                string readme = Path.Combine(dir, "README.txt");
+                if (!File.Exists(readme))
+                    File.WriteAllText(readme, text, new UTF8Encoding(false));
+            }
+            catch { }
+        }
+
+        private static string GetUnitStamp(PackageUnit unit)
+        {
+            if (unit == null) return "";
+            if (!string.IsNullOrWhiteSpace(unit.packageSha256))
+                return unit.packageSha256.Trim();
+            return (unit.fingerprint ?? "").Trim();
+        }
+
+        private static Dictionary<string, string> LoadApplied()
+        {
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                if (!File.Exists(AppliedStatePath)) return map;
+                var state = JsonAdapter.FromJson<AppliedState>(File.ReadAllText(AppliedStatePath, Encoding.UTF8));
+                if (state != null && state.units != null)
+                {
+                    foreach (var kv in state.units)
+                    {
+                        if (!string.IsNullOrEmpty(kv.Key))
+                            map[kv.Key] = kv.Value ?? "";
+                    }
+                }
+            }
+            catch (Exception ex) { LauncherLog.Warn("applied.json read: " + ex.Message); }
+            return map;
+        }
+
+        private static void SaveApplied(Dictionary<string, string> map)
+        {
+            Directory.CreateDirectory(OfficialModlistDir);
+            var state = new AppliedState { units = map ?? new Dictionary<string, string>() };
+            File.WriteAllText(AppliedStatePath, JsonAdapter.ToJson(state), new UTF8Encoding(false));
+        }
+
+        private static string GetAppliedSha(string unitId)
+        {
+            if (string.IsNullOrEmpty(unitId)) return "";
+            string v;
+            return LoadApplied().TryGetValue(unitId, out v) ? (v ?? "") : "";
+        }
+
+        private static readonly object AppliedLock = new object();
+
+        private static void StampApplied(PackageUnit unit)
+        {
+            if (unit == null || string.IsNullOrEmpty(unit.id)) return;
+            lock (AppliedLock)
+            {
+                var map = LoadApplied();
+                map[unit.id] = GetUnitStamp(unit);
+                SaveApplied(map);
+            }
+        }
+
+        private sealed class AppliedState
+        {
+            public Dictionary<string, string> units { get; set; }
+        }
+
+        private static HashSet<string> ListArchiveFiles(string archive)
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string sevenZip = SevenZipPath;
+            if (string.IsNullOrEmpty(sevenZip) || !File.Exists(sevenZip))
+                sevenZip = SevenZipBootstrap.Ensure(null, CancellationToken.None);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = sevenZip,
+                WorkingDirectory = Path.GetDirectoryName(sevenZip),
+                Arguments = "l -slt -- \"" + archive + "\"",
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(sevenZip) + ";" + Environment.GetFolderPath(Environment.SpecialFolder.System);
+            using (var p = Process.Start(psi))
+            {
+                if (p == null)
+                    throw new FlappyException("Failed to start 7za.exe to list archive");
+                string stdout = p.StandardOutput.ReadToEnd();
+                p.WaitForExit();
+                if (p.ExitCode > 1)
+                    throw new FlappyException("7z list failed for:\n" + Path.GetFileName(archive));
+
+                bool inListing = false;
+                string curPath = null;
+                bool curFolder = false;
+                Action flush = () =>
+                {
+                    if (string.IsNullOrEmpty(curPath) || curFolder) return;
+                    string rel = curPath.Replace('/', '\\').TrimStart('\\');
+                    if (rel.Length > 0) set.Add(rel);
+                };
+                foreach (string raw in stdout.Split(new[] { "\r\n", "\n" }, StringSplitOptions.None))
+                {
+                    string line = raw ?? "";
+                    if (line.StartsWith("----------"))
+                    {
+                        inListing = true;
+                        continue;
+                    }
+                    if (!inListing) continue;
+                    if (line.Length == 0)
+                    {
+                        flush();
+                        curPath = null;
+                        curFolder = false;
+                        continue;
+                    }
+                    if (line.StartsWith("Path = ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        flush();
+                        curPath = line.Substring(7).Trim();
+                        curFolder = false;
+                    }
+                    else if (line.StartsWith("Folder = ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string v = line.Substring(9).Trim();
+                        curFolder = v == "+" || v.Equals("Yes", StringComparison.OrdinalIgnoreCase);
+                    }
+                    else if (line.StartsWith("Attributes = ", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (line.IndexOf('D') >= 0) curFolder = true;
+                    }
+                }
+                flush();
+            }
+            return set;
+        }
+
+        private static void SyncDeleteExtraFiles(PackageUnit unit, string dest, string archive)
+        {
+            if (string.IsNullOrEmpty(dest) || !Directory.Exists(dest)) return;
+            string modsRoot = Path.GetFullPath(Path.Combine(GameRootPath, "mods")).TrimEnd('\\') + "\\";
+            string full = Path.GetFullPath(dest).TrimEnd('\\') + "\\";
+            if (!full.StartsWith(modsRoot, StringComparison.OrdinalIgnoreCase))
+                return;
+            if (string.Equals(full, modsRoot, StringComparison.OrdinalIgnoreCase))
+                return;
+
+            var keep = ListArchiveFiles(archive);
+            if (keep.Count == 0)
+            {
+                LauncherLog.Warn("sync-delete skipped (empty archive list): " + DisplayName(unit));
+                return;
+            }
+
+            string[] files;
+            try { files = Directory.GetFiles(dest, "*", SearchOption.AllDirectories); }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("sync-delete list: " + ex.Message);
+                return;
+            }
+
+            int deleted = 0;
+            int destLen = dest.TrimEnd('\\', '/').Length;
+            foreach (string f in files)
+            {
+                string rel = f.Substring(destLen).TrimStart('\\', '/').Replace('/', '\\');
+                if (IsVolatileFile(Path.GetFileName(f))) continue;
+                if (keep.Contains(rel)) continue;
+                try
+                {
+                    File.Delete(f);
+                    deleted++;
+                }
+                catch (Exception ex) { LauncherLog.Warn("sync-delete " + rel + ": " + ex.Message); }
+            }
+
+            try
+            {
+                var dirs = Directory.GetDirectories(dest, "*", SearchOption.AllDirectories)
+                    .OrderByDescending(d => d.Length);
+                foreach (string d in dirs)
+                {
+                    try
+                    {
+                        if (Directory.GetFileSystemEntries(d).Length == 0)
+                            Directory.Delete(d, false);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+
+            if (deleted > 0)
+                LauncherLog.Info("sync-delete " + DisplayName(unit) + " extraFiles=" + deleted);
         }
 
         // ---------- launch ----------
 
         public static string GetProfileName(string mode)
         {
+            if (string.Equals(GameCatalog.Current.Id, "flappy", StringComparison.OrdinalIgnoreCase))
+                return Loc.IsRu
+                    ? "2 - Flappy RU [SexLab+]"
+                    : "1 - Flappy EN [SexLab+]";
             return mode == "VR"
-                ? "VR - Re-Dovah - 1.0.0 - alpha"
-                : "AE - Re-Dovah - 1.0.0";
+                ? "VR - Re-Dovah"
+                : "AE - Re-Dovah";
         }
 
         /// <summary>MO2 customExecutables title for one-click start (from ModOrganizer.ini.AE/VR).</summary>
         public static string GetStartExecutableTitle(string mode)
         {
+            if (string.Equals(GameCatalog.Current.Id, "flappy", StringComparison.OrdinalIgnoreCase))
+                return "Run Flappy";
             return mode == "VR" ? "Start Re-Dovah VR" : "Start Re-Dovah";
+        }
+
+        /// <summary>MO2 executable that rebuilds Pandora + BodySlide + Synthesis through VFS.</summary>
+        public static string GetRebuildExecutableTitle()
+        {
+            return "Rebuild Outputs";
         }
 
         /// <summary>
@@ -1123,7 +2048,44 @@ namespace FlappyReDovahLauncher
         /// </summary>
         public static void LaunchGame(string mode)
         {
+            if (GameCatalog.Current != null && GameCatalog.Current.IsDoom)
+            {
+                LaunchDoom();
+                return;
+            }
             LaunchMo(mode, openUiOnly: false);
+        }
+
+        public static void LaunchDoom()
+        {
+            string exe = Path.Combine(GameRootPath, "zandronum.exe");
+            if (!File.Exists(exe))
+                throw new FlappyException("zandronum.exe not found.\nInstall the Doom pack first.");
+
+            var args = new StringBuilder();
+            args.Append("-iwad doom2.wad");
+            string order = Path.Combine(GameRootPath, "loadorder.txt");
+            if (File.Exists(order))
+            {
+                foreach (string raw in File.ReadAllLines(order))
+                {
+                    string line = (raw ?? "").Trim();
+                    if (line.Length == 0 || line.StartsWith("#")) continue;
+                    args.Append(" -file \"").Append(line).Append("\"");
+                }
+            }
+            string host = (GameCatalog.Current.ConnectHost ?? "").Trim();
+            if (host.Length == 0) host = "188.235.1.72:10666";
+            args.Append(" -connect ").Append(host);
+
+            LauncherLog.Info("Start Doom " + args);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = exe,
+                Arguments = args.ToString(),
+                WorkingDirectory = GameRootPath,
+                UseShellExecute = true
+            });
         }
 
         /// <summary>Open Mod Organizer UI for modding (chosen AE/VR profile).</summary>
@@ -1132,7 +2094,16 @@ namespace FlappyReDovahLauncher
             LaunchMo(mode, openUiOnly: true);
         }
 
-        private static void LaunchMo(string mode, bool openUiOnly)
+        /// <summary>
+        /// Run pack rebuild (Pandora / BodySlide / Synthesis) through MO2 VFS.
+        /// Same title as ModOrganizer.ini custom executable "Rebuild Outputs".
+        /// </summary>
+        public static void LaunchRebuild(string mode)
+        {
+            LaunchMo(mode, openUiOnly: false, execTitleOverride: GetRebuildExecutableTitle());
+        }
+
+        private static void LaunchMo(string mode, bool openUiOnly, string execTitleOverride = null)
         {
             mode = (mode == "VR") ? "VR" : "AE";
             if (mode == "VR" && GetSavedChannel() == InstallChannel.AeOnly)
@@ -1153,17 +2124,20 @@ namespace FlappyReDovahLauncher
             string regPath = isVr
                 ? @"SOFTWARE\WOW6432Node\Bethesda Softworks\Skyrim VR"
                 : @"SOFTWARE\WOW6432Node\Bethesda Softworks\Skyrim Special Edition";
-            string execTitle = GetStartExecutableTitle(mode);
+            string execTitle = string.IsNullOrEmpty(execTitleOverride)
+                ? GetStartExecutableTitle(mode)
+                : execTitleOverride;
 
             if (!File.Exists(moExe))
                 throw new FlappyException(Loc.T("mo_missing"));
             if (!Directory.Exists(stockDir.TrimEnd('\\')))
                 throw new FlappyException(stockSub + " folder not found.\n\nIf you chose AE-only, use AE mode.");
-            if (!File.Exists(iniProfile))
+            if (File.Exists(iniProfile))
+                File.Copy(iniProfile, iniMain, true);
+            else if (!File.Exists(iniMain))
                 throw new FlappyException("Missing " + Path.GetFileName(iniProfile));
 
             EnsureInstalledPath(regPath, stockDir);
-            File.Copy(iniProfile, iniMain, true);
             PatchModOrganizerIni(iniMain, profileName, gameName, stockDir.TrimEnd('\\'));
 
             // UI only: -p profile
@@ -1279,11 +2253,18 @@ namespace FlappyReDovahLauncher
             return sb.ToString();
         }
 
-        private static string FormatDownloadStatus(int finished, int total, double bytesPerSec, IEnumerable<DlSlot> slots)
+        private static string FormatDownloadStatus(int finished, int total, double bytesPerSec, IEnumerable<DlSlot> slots, long remainingBytes = 0)
         {
             var sb = new StringBuilder();
             sb.Append(finished).Append('/').Append(total);
             sb.Append("  ·  ").Append(FormatSpeed(bytesPerSec));
+            if (bytesPerSec > 10240 && remainingBytes > 0)
+            {
+                double sec = remainingBytes / bytesPerSec;
+                string eta = FormatEta(sec);
+                if (!string.IsNullOrEmpty(eta))
+                    sb.Append("  ·  ETA: ").Append(eta);
+            }
             var active = new List<DlSlot>();
             foreach (var s in slots)
             {
@@ -1312,6 +2293,17 @@ namespace FlappyReDovahLauncher
                     sb.Append(s.Name).Append(' ').Append(FormatBytes(s.Received));
             }
             return sb.ToString();
+        }
+
+        private static string FormatEta(double seconds)
+        {
+            if (seconds <= 0 || double.IsInfinity(seconds) || double.IsNaN(seconds)) return "";
+            var ts = TimeSpan.FromSeconds(seconds);
+            if (ts.TotalHours >= 1)
+                return string.Format("{0}h {1:D2}m", (int)ts.TotalHours, ts.Minutes);
+            if (ts.TotalMinutes >= 1)
+                return string.Format("{0}m {1:D2}s", (int)ts.TotalMinutes, ts.Seconds);
+            return string.Format("{0}s", Math.Max(1, (int)ts.TotalSeconds));
         }
 
         private static string FormatSpeed(double bytesPerSec)

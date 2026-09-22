@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Security.Principal;
 using System.Windows.Forms;
 
 namespace FlappyReDovahLauncher
@@ -34,6 +35,16 @@ namespace FlappyReDovahLauncher
             LauncherSettings.Language = Loc.Language;
             LauncherSettings.ApplyToRuntime();
 
+            if (!IsRunningAsAdministrator())
+            {
+                MessageBox.Show(
+                    Loc.T("admin_required"),
+                    Loc.T("admin_title"),
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
             // Before UI: if a newer launcher is on CDN, download and restart into it.
             try
             {
@@ -47,6 +58,23 @@ namespace FlappyReDovahLauncher
             }
 
             System.Windows.Forms.Application.Run(new Application());
+        }
+
+        private static bool IsRunningAsAdministrator()
+        {
+            try
+            {
+                using (var id = WindowsIdentity.GetCurrent())
+                {
+                    if (id == null) return false;
+                    var principal = new WindowsPrincipal(id);
+                    return principal.IsInRole(WindowsBuiltInRole.Administrator);
+                }
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static void Application_ThreadException(object sender, System.Threading.ThreadExceptionEventArgs e)

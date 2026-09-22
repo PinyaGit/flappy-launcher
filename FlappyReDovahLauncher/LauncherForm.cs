@@ -91,7 +91,11 @@ namespace FlappyReDovahLauncher
 
         private bool ShowMoButton
         {
-            get { return GameCatalog.Current.Available && _isInstalled && !_busy; }
+            get
+            {
+                if (GameCatalog.Current == null || GameCatalog.Current.IsDoom) return false;
+                return GameCatalog.Current.Available && _isInstalled && !_busy;
+            }
         }
 
         private bool ShowCancelButton
@@ -246,10 +250,18 @@ namespace FlappyReDovahLauncher
                 Bitmap bmp = null;
                 try
                 {
-                    // Embedded Assets/* via Resources.resx — change PNG + rebuild to update UI
-                    Bitmap embedded = game.GetIconBitmap();
-                    if (embedded != null)
-                        bmp = ResizeSharp(embedded, RailIconPx);
+                    if (!string.IsNullOrEmpty(game.IconPath) && File.Exists(game.IconPath))
+                    {
+                        using (var src = new Bitmap(game.IconPath))
+                            bmp = ResizeSharp(src, RailIconPx);
+                    }
+                    else
+                    {
+                        // Embedded Assets/* via Resources.resx — change PNG + rebuild to update UI
+                        Bitmap embedded = game.GetIconBitmap();
+                        if (embedded != null)
+                            bmp = ResizeSharp(embedded, RailIconPx);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -549,14 +561,15 @@ namespace FlappyReDovahLauncher
                 _rcGames[i] = new Rectangle(iconPad, y, railTile, railTile + railLabel);
             }
 
-            // Footer (right column): Play, Modding above it (Cancel replaces Modding while busy)
+            // Footer (right column): Play, Mod Organizer 2 above it (Cancel replaces it while busy)
             const int playW = 128;
+            const int moW = 176;
             const int playH = 44;
             const int smallH = 32;
             const int gap = 8;
             int leftCol = iconPad + iconSize + gap + 8;
             _rcPlay = new Rectangle(w - gap - playW, h - 14 - playH, playW, playH);
-            _rcMo = new Rectangle(_rcPlay.X, _rcPlay.Top - gap - smallH, playW, smallH);
+            _rcMo = new Rectangle(_rcPlay.Right - moW, _rcPlay.Top - gap - smallH, moW, smallH);
             _rcCancel = _rcMo;
 
             // Dual progress: current archive (top) + overall (bottom), left of Play
@@ -621,6 +634,20 @@ namespace FlappyReDovahLauncher
                     return;
                 }
 
+                if (AccessGate.IsRequired(game) && !AccessGate.HasSession(game))
+                {
+                    // Don't hit gated CDN until Install/Update asks for the phrase.
+                    _cachedIndex = null;
+                    OnlineVersion = null;
+                    _isInstalled = PackageInstaller.IsInstalled();
+                    RefreshPlayState();
+                    _statusText = _isInstalled ? Loc.T("ready") : Loc.T("ready_install");
+                    RefreshVersionText(indexError: true);
+                    IsReady = _isInstalled;
+                    RedrawLayered(force: true);
+                    return;
+                }
+
                 // Clear stub/previous-game status before CDN work
                 _statusText = Loc.T("checking");
                 _showProgress = false;
@@ -646,14 +673,15 @@ namespace FlappyReDovahLauncher
                     RedrawLayered(force: true);
                 }
 
-                bool autoInstall = !upToDate && (
-                    Constants.AUTOMATICALLY_BEGIN_UPDATING ||
-                    Constants.HasLocalPackageBundle);
-                if (autoInstall)
+                if (!_isInstalled)
                 {
-                    LauncherLog.Info(Constants.HasLocalPackageBundle
-                        ? "Local package bundle present — auto Install/Update"
-                        : "Auto-update enabled — starting");
+                    _statusText = PackageInstaller.CanFreshInstall()
+                        ? Loc.T("ready_install")
+                        : Loc.T("need_torrent_short");
+                }
+                else if (Constants.AUTOMATICALLY_BEGIN_UPDATING && !upToDate)
+                {
+                    LauncherLog.Info("Auto-update enabled — starting");
                     StartPackageInstallAsync();
                 }
             }
@@ -1432,6 +1460,19 @@ namespace FlappyReDovahLauncher
             if (_trayMenu == null) return;
             _trayMenu.Items.Clear();
             _trayMenu.Items.Add(Loc.T("tray_open"), null, (s, e) => RestoreFromTray());
+            string rebuildCmd = Path.Combine(PackageInstaller.GameRootPath, "Tools", "Rebuild", "Rebuild-Outputs.cmd");
+            if (PackageInstaller.IsInstalled() && File.Exists(rebuildCmd))
+            {
+                _trayMenu.Items.Add(Loc.T("tray_rebuild"), null, (s, e) =>
+                {
+                    try { PackageInstaller.LaunchRebuild(PackageInstaller.GetSavedMode()); }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Error("rebuild", ex);
+                        MessageBox.Show(FlappyException.FormatForUser(ex), Loc.T("tray_rebuild"));
+                    }
+                });
+            }
             _trayMenu.Items.Add(Loc.T("tray_exit"), null, (s, e) => Environment.Exit(0));
             if (_tray != null) _tray.Text = Loc.T("tray_tip");
         }
@@ -1582,6 +1623,7 @@ namespace FlappyReDovahLauncher
         private void OnClickModding()
         {
             if (_busy || !PackageInstaller.IsInstalled()) return;
+            if (GameCatalog.Current != null && GameCatalog.Current.IsDoom) return;
             try
             {
                 string last = PackageInstaller.GetSavedMode();
@@ -1601,6 +1643,7 @@ namespace FlappyReDovahLauncher
         private void OnClickVrChannel()
         {
             if (_busy || !PackageInstaller.IsInstalled()) return;
+            if (GameCatalog.Current == null || !GameCatalog.Current.SupportsVr) return;
 
             if (PackageInstaller.GetSavedChannel() == InstallChannel.AeOnly)
             {
@@ -1650,6 +1693,9 @@ namespace FlappyReDovahLauncher
 
         private InstallChannel ResolveChannelForJob(bool allowPrompt)
         {
+            if (GameCatalog.Current == null || GameCatalog.Current.IsDoom || !GameCatalog.Current.SupportsVr)
+                return InstallChannel.AeOnly;
+
             if (PackageInstaller.IsInstalled())
                 return PackageInstaller.GetSavedChannel();
 
@@ -1664,12 +1710,25 @@ namespace FlappyReDovahLauncher
 
         private void StartPackageInstallAsync()
         {
+            if (!PackageInstaller.IsInstalled() && !PackageInstaller.CanFreshInstall())
+            {
+                MessageBox.Show(
+                    Loc.T("need_torrent"),
+                    GameCatalog.Current.Title,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+                return;
+            }
+            if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
+                return;
             InstallChannel channel;
             try { channel = ResolveChannelForJob(allowPrompt: true); }
             catch (OperationCanceledException) { return; }
 
             StartPackageJob(
-                channel == InstallChannel.AeOnly ? Loc.T("preparing_ae") : Loc.T("preparing_vr"),
+                (GameCatalog.Current != null && GameCatalog.Current.IsDoom)
+                    ? Loc.T("preparing")
+                    : (channel == InstallChannel.AeOnly ? Loc.T("preparing_ae") : Loc.T("preparing_vr")),
                 (index, report, cancel) => PackageInstaller.InstallAll(index, report, cancel, channel),
                 Loc.T("fail_install"),
                 launchAfter: Constants.AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING);
@@ -1678,6 +1737,8 @@ namespace FlappyReDovahLauncher
         private void StartRepairAsync()
         {
             if (_busy) return;
+            if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
+                return;
             var channel = PackageInstaller.GetSavedChannel();
 
             _busy = true;
@@ -1743,10 +1804,11 @@ namespace FlappyReDovahLauncher
 
                 var sb = new System.Text.StringBuilder();
                 sb.AppendLine(Loc.F("repair_to_dl", need.Count));
-                sb.AppendLine(Loc.T("settings_hint").Contains("{1}")
-                    ? Loc.F("settings_hint", GameCatalog.Current.Title,
-                        channel == InstallChannel.AeOnly ? Loc.T("channel_ae_short") : Loc.T("channel_full_short"))
-                    : "");
+                if (GameCatalog.Current == null || GameCatalog.Current.IsDoom)
+                    sb.AppendLine(GameCatalog.Current != null ? GameCatalog.Current.Title : "");
+                else if (Loc.T("settings_hint").Contains("{1}"))
+                    sb.AppendLine(Loc.F("settings_hint", GameCatalog.Current.Title,
+                        channel == InstallChannel.AeOnly ? Loc.T("channel_ae_short") : Loc.T("channel_full_short")));
                 sb.AppendLine();
                 long bytes = 0;
                 int show = Math.Min(15, need.Count);
@@ -1868,6 +1930,8 @@ namespace FlappyReDovahLauncher
                 MessageBox.Show(Loc.GameBlurb(GameCatalog.Current), GameCatalog.Current.Title);
                 return;
             }
+            if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
+                return;
             _busy = true;
             RefreshPlayState();
             _showProgress = true;
@@ -1923,6 +1987,11 @@ namespace FlappyReDovahLauncher
         {
             try
             {
+                if (GameCatalog.Current != null && GameCatalog.Current.IsDoom)
+                {
+                    PackageInstaller.LaunchDoom();
+                    return;
+                }
                 string last = PackageInstaller.GetSavedMode();
                 string mode = ModeSelectForm.ShowSelect(this, last);
                 if (string.IsNullOrEmpty(mode))

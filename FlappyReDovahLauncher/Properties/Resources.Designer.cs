@@ -45,6 +45,11 @@ namespace FlappyReDovahLauncher.Properties {
             get { return (System.Drawing.Bitmap)ResourceManager.GetObject("bg_flappy_400", resourceCulture); }
         }
 
+        /// <summary>Flappy Doom splash / poster.</summary>
+        internal static System.Drawing.Bitmap bg_doom {
+            get { return (System.Drawing.Bitmap)ResourceManager.GetObject("bg_doom", resourceCulture); }
+        }
+
         /// <summary>Re-Dovah rail logo.</summary>
         internal static System.Drawing.Bitmap logo_re_dovah {
             get { return (System.Drawing.Bitmap)ResourceManager.GetObject("logo_re_dovah", resourceCulture); }
@@ -53,6 +58,11 @@ namespace FlappyReDovahLauncher.Properties {
         /// <summary>Flappy 4.0.0 rail logo (shared RU/EN).</summary>
         internal static System.Drawing.Bitmap logo_flappy_400 {
             get { return (System.Drawing.Bitmap)ResourceManager.GetObject("logo_flappy_400", resourceCulture); }
+        }
+
+        /// <summary>Flappy Doom rail logo.</summary>
+        internal static System.Drawing.Bitmap logo_doom {
+            get { return (System.Drawing.Bitmap)ResourceManager.GetObject("logo_doom", resourceCulture); }
         }
 
         internal static System.Drawing.Bitmap discord {

@@ -1,15 +1,14 @@
 using System;
-using System.Globalization;
 using System.IO;
 using System.Text;
 
 namespace FlappyReDovahLauncher
 {
-    /// <summary>Persisted next to the exe (language, download workers).</summary>
+    /// <summary>Persisted next to the exe (language). Download workers are fixed at 2.</summary>
     internal static class LauncherSettings
     {
         public static string Language { get; set; }
-        public static int DownloadParallelism { get; set; }
+        public static int DownloadParallelism { get { return 2; } }
 
         private static string FilePath
         {
@@ -19,7 +18,6 @@ namespace FlappyReDovahLauncher
         public static void Load()
         {
             Language = "";
-            DownloadParallelism = 3;
             try
             {
                 if (!File.Exists(FilePath)) return;
@@ -32,12 +30,6 @@ namespace FlappyReDovahLauncher
                     string val = line.Substring(eq + 1).Trim();
                     if (key == "lang" || key == "language")
                         Language = Loc.Normalize(val);
-                    else if (key == "downloads" || key == "parallel")
-                    {
-                        int n;
-                        if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out n))
-                            DownloadParallelism = ClampWorkers(n);
-                    }
                 }
             }
             catch (Exception ex)
@@ -50,9 +42,7 @@ namespace FlappyReDovahLauncher
         {
             try
             {
-                string body =
-                    "lang=" + (Language ?? "") + Environment.NewLine +
-                    "downloads=" + ClampWorkers(DownloadParallelism) + Environment.NewLine;
+                string body = "lang=" + (Language ?? "") + Environment.NewLine;
                 File.WriteAllText(FilePath, body, new UTF8Encoding(false));
             }
             catch (Exception ex)
@@ -63,14 +53,12 @@ namespace FlappyReDovahLauncher
 
         public static int ClampWorkers(int n)
         {
-            if (n < 1) return 1;
-            if (n > 4) return 4;
-            return n;
+            return 2;
         }
 
         public static void ApplyToRuntime()
         {
-            Constants.DOWNLOAD_PARALLELISM = ClampWorkers(DownloadParallelism);
+            Constants.DOWNLOAD_PARALLELISM = 2;
         }
     }
 }

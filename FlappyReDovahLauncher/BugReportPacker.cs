@@ -72,6 +72,7 @@ namespace FlappyReDovahLauncher
                     CreateNoWindow = true,
                     WorkingDirectory = staging
                 };
+                psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(seven) + ";" + Environment.GetFolderPath(Environment.SpecialFolder.System);
                 using (var p = Process.Start(psi))
                 {
                     if (p == null) throw new FlappyException("7-Zip failed to start.");

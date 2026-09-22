@@ -22,16 +22,19 @@ Source for **Flappy Launcher** — a multi-game desktop library (**Re-Dovah**, *
 |--|--|
 | **Product** | Flappy Launcher |
 | **Exe** | `Flappy Launcher.exe` |
-| **Version (this tree)** | **0.0.9** (launcher only — not a game version) |
+| **Version (this tree)** | **0.2.0** (launcher only — not a game version) |
+| **Framework** | **.NET 8.0 Windows Desktop** (Self-Contained Single-File) |
 | **CDN zip** | `launcher/Flappy-Launcher.zip` |
 | **Manifest** | `launcher/version.json` |
 
 This is **not** a full game dump and **not** the mod archives. It is the installer/UI that:
 
-- shows a Steam-style **game rail** (multiple titles)
+- gear **Settings** (RU/EN, repair, VR add/remove, bug report, uninstall)
+- shows a Steam-style **game rail** (multiple titles: Re-Dovah, Flappy Standard, Doom)
 - reads each game’s `index.json` from the CDN (or a local torrent bundle)
-- downloads/verifies multi-package `.7z` units (parallel workers, default 3)
-- downloads **7-Zip Extra** from [7-zip.org](https://www.7-zip.org/) on first extract (not shipped next to the exe)
+- downloads/verifies multi-package `.7z` units with download speed & ETA indicators
+- bundles embedded **7-Zip Extra** (`7za.exe`, `7za.dll`, `7zxa.dll`)
+- atomic extraction and instant resume support
 - supports **AE only** vs **AE+VR** where a title supports it
 - Update / Repair by fingerprint
 - Play via Mod Organizer 2 custom executables
@@ -50,21 +53,21 @@ Built on ideas from Universal Game Launcher (Teemu Sillanpää, MIT), heavily ad
 
 ## Requirements (build)
 
-- Windows 10/11  
-- Visual Studio with .NET desktop workload  
-- [.NET Framework 4.8](https://dotnet.microsoft.com/download/dotnet-framework/net48)  
+- Windows 10/11
+- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 
 ## Build
 
-1. Open `FlappyReDovahLauncher.sln`  
-2. Build **Release**  
-3. Output: `FlappyReDovahLauncher\bin\Release\Flappy Launcher.exe`  
-
-Or:
-
+1. Open `FlappyReDovahLauncher.sln` in Visual Studio or build via CLI:
 ```powershell
-.\Publish-Launcher.ps1 -Version 0.0.9
+dotnet publish FlappyReDovahLauncher/FlappyReDovahLauncher.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 ```
+
+Or 1-click build and package:
+```powershell
+.\Publish-Launcher.bat
+```
+(or `Publish-Launcher.ps1 -Version 0.2.0`)
 
 ### Ship folder (official package)
 
@@ -103,7 +106,7 @@ Main knobs: `FlappyReDovahLauncher/Constants.cs`
 - Product name / exe / package names  
 - `CDN_PACKAGES_BASE_URL` (default `https://cdn.flappy.su/`)  
 - Discord / Boosty links  
-- `DOWNLOAD_PARALLELISM` (default **3**, Settings can set 1–4)  
+- `DOWNLOAD_PARALLELISM` (fixed **2**, not user-configurable)  
 
 Games are registered in `GameCatalog.cs` (id, CDN folder, install folder, VR flag, splash/logo resources).
 
@@ -122,8 +125,13 @@ https://cdn.flappy.su/
 
 | File | Purpose |
 |------|---------|
-| `Publish-Launcher.ps1` | Build Release zip + `version.json` |
-| `Upload-Launcher-CDN.bat` | **Template only** — placeholders; use a private `*.local.bat` |
+| `Publish-Launcher.bat` | 1-click build Release zip + version.json and copy to CDN |
+| `Publish-Launcher.ps1` | Core PowerShell build and packaging automation |
+
+Game packs are built on the server builder (OliveTin Web UI), not locally.
+Sync scripts:
+- `sync-push.bat` / `sync-push.sh`: push mods to builder
+- `sync-pull.bat` / `sync-pull.sh`: pull changes from builder
 
 ## Security / privacy
 
@@ -131,18 +139,6 @@ https://cdn.flappy.su/
 - Online install needs network access to the CDN.  
 - First Skyrim path setup may request elevation once (registry `Installed Path`).  
 - Logs: `launcher.log` next to the exe (local unless you send them).
-
-## Versions
-
-Launcher app version only — not a game/modpack version.
-
-| | |
-|--|--|
-| **0.0.9** | Self-update still works from public **0.0.4** (extract the zip to a folder first — do not run the exe from inside 7-Zip/WinRAR). If the new exe starts from an unpack temp dir, it copies itself to `%LocalAppData%\FlappyLauncher\`. |
-| **0.0.8** | Self-update no longer opens Explorer / Documents when the apply script cannot start the new exe. |
-| **0.0.6** | Settings (gear): RU/EN, Repair, install/remove VR, bug report, uninstall this game, 1–4 download workers. Minimize to tray. Chrome buttons use `Resources/button.png`. |
-| **0.0.5** | Multi-game library (Re-Dovah + Flappy 4.0.0 stub). Up to 3 parallel package downloads. |
-| **0.0.4** | Product rebrand to **Flappy Launcher** (`Flappy Launcher.exe` + `launcher/Flappy-Launcher.zip`). |
 
 ## License
 

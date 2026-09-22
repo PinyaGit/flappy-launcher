@@ -99,9 +99,34 @@ namespace FlappyReDovahLauncher
         public static bool AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING = false;
         public static bool CHECK_LAUNCHER_UPDATES = true;
 
-        /// <summary>Parallel package downloads (CDN workers). Current bar still tracks one file at a time.</summary>
-        public static int DOWNLOAD_PARALLELISM = 3;
+        /// <summary>
+        /// False = no full game download from CDN. First install is torrent unpack only.
+        /// Update / Repair still use CDN. Flip to true to restore online install.
+        /// </summary>
+        public static bool ALLOW_CDN_FRESH_INSTALL = false;
+
+        /// <summary>
+        /// Master switch for closed-test keys. False = never prompt, never send Bearer.
+        /// Server <c>CDN_GATE_ENABLED=0</c> also opens /flappy/ without a launcher rebuild.
+        /// </summary>
+        public static bool ACCESS_GATES_ENABLED = false;
+
+        public static string ACCESS_UNLOCK_URL
+        {
+            get { return CombineCdn("auth/unlock"); }
+        }
+
+        public static string ACCESS_STATUS_URL
+        {
+            get { return CombineCdn("auth/status"); }
+        }
+
+        /// <summary>Fixed CDN workers (no Settings toggle). Matches nginx per-IP connection cap.</summary>
+        public static int DOWNLOAD_PARALLELISM = 2;
         public static long DOWNLOAD_CHUNK_BYTES = 800L * 1024 * 1024;
+
+        /// <summary>Parallel 7-Zip extract processes after download/torrent acquire.</summary>
+        public static int EXTRACT_PARALLELISM = 3;
 
         public static string GetLocalPackagePath(string packageRelative)
         {

@@ -25,9 +25,28 @@ namespace FlappyReDovahLauncher
         public string IconResource { get; set; }
         /// <summary>False = stub / coming soon (UI only).</summary>
         public bool Available { get; set; }
+        /// <summary>
+        /// Closed-test key before CDN download. No effect unless
+        /// <see cref="Constants.ACCESS_GATES_ENABLED"/> and the server gate is on.
+        /// Never set this on Re-Dovah.
+        /// </summary>
+        public bool RequiresAccessKey { get; set; }
         /// <summary>Show Get VR / channel options.</summary>
         public bool SupportsVr { get; set; }
+        /// <summary>True = first install may download the full pack from CDN. Skyrim stays torrent-only.</summary>
+        public bool AllowCdnFreshInstall { get; set; }
         public string Description { get; set; }
+        /// <summary>"mo2" (Skyrim packs) or "doom" (Zandronum client + auto-connect).</summary>
+        public string Kind { get; set; }
+        /// <summary>host:port for Kind=doom. Ignored otherwise.</summary>
+        public string ConnectHost { get; set; }
+        /// <summary>Loose rail icon next to the exe (Assets/logo_doom.png).</summary>
+        public string IconPath { get; set; }
+
+        public bool IsDoom
+        {
+            get { return string.Equals(Kind, "doom", StringComparison.OrdinalIgnoreCase); }
+        }
 
         /// <summary>Load embedded logo bitmap (do not dispose — owned by ResourceManager).</summary>
         public Bitmap GetIconBitmap()
@@ -106,12 +125,12 @@ namespace FlappyReDovahLauncher
                     Id = "re-dovah",
                     Title = "Flappy Re-Dovah",
                     ShortLabel = "Re-Dovah",
-                    // Empty = CDN root (current live layout). Later: "re-dovah"
-                    CdnFolder = "",
-                    InstallFolderName = "Flappy Re-Dovah",
+                    CdnFolder = "re-dovah",
+                    InstallFolderName = "Re-Dovah",
                     SplashResource = "bg_re_dovah",
                     IconResource = "logo_re_dovah",
                     Available = true,
+                    RequiresAccessKey = false,
                     SupportsVr = true,
                     Description = "Skyrim AE + VR modpack"
                 },
@@ -124,9 +143,28 @@ namespace FlappyReDovahLauncher
                     InstallFolderName = "Flappy",
                     SplashResource = "bg_flappy_400",
                     IconResource = "logo_flappy_400",
-                    Available = false, // stub until 4.0.0 packages on CDN
+                    Available = true,
+                    RequiresAccessKey = false,
                     SupportsVr = false,
-                    Description = "Coming soon — Flappy 4.0.0"
+                    Description = "Skyrim AE",
+                    Kind = "mo2"
+                },
+                new GameDefinition
+                {
+                    Id = "doom",
+                    Title = "Flappy Doom",
+                    ShortLabel = "Doom",
+                    CdnFolder = "doom",
+                    InstallFolderName = "Doom",
+                    SplashResource = "bg_doom",
+                    IconResource = "logo_doom",
+                    Available = true,
+                    RequiresAccessKey = false,
+                    SupportsVr = false,
+                    Description = "Zandronum 3.3 · Chillax + HDOOM",
+                    Kind = "doom",
+                    ConnectHost = "doom.flappy.su:10666",
+                    AllowCdnFreshInstall = true
                 }
             };
         }
@@ -179,16 +217,17 @@ namespace FlappyReDovahLauncher
             get
             {
                 string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                string folder = (Current.CdnFolder ?? "").Trim().Trim('/', '\\');
+                if (string.IsNullOrEmpty(folder)) return null;
+                // Windows is case-insensitive: "flappy" packages would collide with game folder "Flappy".
+                // Torrent layout is content\<cdnfolder>\ next to the exe; CDN URLs stay /flappy and /re-dovah.
                 string[] candidates =
                 {
-                    Path.Combine(baseDir, Current.CdnFolder ?? ""),
-                    Path.Combine(baseDir, Current.InstallFolderName + "-packages"),
-                    // Legacy single-game layout (root index.json) only for re-dovah
-                    string.Equals(Current.Id, "re-dovah", StringComparison.OrdinalIgnoreCase) ? baseDir : null
+                    Path.Combine(baseDir, "content", folder),
+                    Path.Combine(baseDir, folder + "-packages")
                 };
                 foreach (var c in candidates)
                 {
-                    if (string.IsNullOrEmpty(c)) continue;
                     if (File.Exists(Path.Combine(c, "index.json")) && Directory.Exists(Path.Combine(c, "packages")))
                         return Path.GetFullPath(c);
                 }
