@@ -27,6 +27,33 @@ $publish = Join-Path $root 'Publish'
 $publishNet8 = Join-Path $publish 'net8'
 $localCdn = Join-Path $publish 'cdn-launcher'
 
+$assemblyInfo = Join-Path $root 'FlappyReDovahLauncher\Properties\AssemblyInfo.cs'
+
+# --- 0. Sync version ---
+if ($Version) {
+    $vParts = $Version.Split('.')
+    while ($vParts.Count -lt 4) { $vParts += '0' }
+    $v4 = ($vParts[0..3] -join '.')
+    $Version = ($vParts[0..2] -join '.')
+    if (Test-Path $assemblyInfo) {
+        $aiContent = Get-Content $assemblyInfo -Raw -Encoding UTF8
+        $aiContent = $aiContent -replace '\[assembly:\s*AssemblyVersion\("[^"]+"\)', "[assembly: AssemblyVersion(`"$v4`")"
+        $aiContent = $aiContent -replace '\[assembly:\s*AssemblyFileVersion\("[^"]+"\)', "[assembly: AssemblyFileVersion(`"$v4`")"
+        [IO.File]::WriteAllText($assemblyInfo, $aiContent, [Text.Encoding]::UTF8)
+        Write-Host "    Stamped AssemblyInfo.cs with version $v4" -ForegroundColor Green
+    }
+} else {
+    if (Test-Path $assemblyInfo) {
+        $aiContent = Get-Content $assemblyInfo -Raw -Encoding UTF8
+        $m = [regex]::Match($aiContent, 'AssemblyFileVersion\("([^"]+)"\)')
+        if ($m.Success) {
+            $Version = ($m.Groups[1].Value.Split('.'))[0..2] -join '.'
+        }
+    }
+    if (-not $Version) { $Version = '0.2.0' }
+}
+Write-Host "    Target version: $Version" -ForegroundColor Green
+
 # --- 1. Build ---
 if (-not $SkipBuild) {
     Write-Host "[1/4] Building .NET 8 Single-File Release..." -ForegroundColor Cyan
@@ -43,14 +70,11 @@ $fromExe = Join-Path $publishNet8 $exeName
 if (-not (Test-Path -LiteralPath $fromExe)) { throw "Missing: $fromExe" }
 Copy-Item -LiteralPath $fromExe -Destination (Join-Path $publish $exeName) -Force
 
-# --- 3. Determine version ---
-if (-not $Version) {
-    $exe = Join-Path $publish $exeName
-    $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
-    $Version = ($vi.FileVersion -split '\.')[0..2] -join '.'
-    if (-not $Version) { $Version = '0.2.0' }
-}
-Write-Host "    Version: $Version" -ForegroundColor Green
+# --- 3. Verify version from built EXE ---
+$exe = Join-Path $publish $exeName
+$vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+$exeVer = ($vi.FileVersion -split '\.')[0..2] -join '.'
+Write-Host "    Built EXE version: $exeVer (target: $Version)" -ForegroundColor Green
 
 # --- 4. Create ZIP ---
 Write-Host "[3/4] Creating Flappy-Launcher.zip..." -ForegroundColor Cyan
