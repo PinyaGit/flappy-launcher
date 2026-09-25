@@ -106,13 +106,13 @@ namespace FlappyReDovahLauncher
             { "coming_soon", "Coming soon" },
             { "coming_soon_named", "{0} is not packaged yet.\n\nComing soon." },
             { "desc_redovah", "Skyrim AE + VR modpack" },
-            { "desc_flappy", "Skyrim AE — closed test" },
-            { "access_title", "Closed test" },
-            { "access_hint", "{0} is in closed test.\nPaste the phrase from the Discord chat." },
+            { "desc_flappy", "Skyrim AE — closed release" },
+            { "access_title", "Closed Release" },
+            { "access_hint", "{0} is currently in closed release.\nPaste the phrase from Discord." },
             { "access_ok", "Continue" },
             { "access_bad", "That phrase does not match." },
             { "access_rate", "Too many tries. Wait {0} min." },
-            { "access_needed", "Need the closed-test phrase to install." },
+            { "access_needed", "Closed release phrase is required to install." },
             { "access_offline", "Cannot reach the access server." },
             { "cancelling", "Cancelling…\nPlease wait" },
             { "scan_fp", "Scanning packages…\nFingerprints" },
@@ -203,6 +203,8 @@ namespace FlappyReDovahLauncher
             { "admin_title", "Administrator required" },
             { "admin_required", "Run this launcher as Administrator.\n\nMO2 tools need elevation:\n• Generate Output folders\n• RaceMenu hotkey R\n• writing the game path in the registry\n\nWithout Administrator rights the launcher will close." },
             { "mo_missing", "ModOrganizer.exe not found.\nInstall or Repair the pack first." },
+            { "clean_cache_ask", "Installation completed successfully!\n\nPackage cache archives occupy: {0}\n\nDo you want to delete the installation archives to free up disk space?\n\n⚠️ WARNING:\n• Deleting will free up {0} on your drive.\n• However, future Repair or reinstall operations will need to re-download missing packages from the network.\n• If you are seeding this via torrent, deleting packages will stop seeding." },
+            { "clean_cache_done", "Freed {0} of disk space." },
         };
 
         private static readonly Dictionary<string, string> RuMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -233,13 +235,13 @@ namespace FlappyReDovahLauncher
             { "coming_soon", "Скоро" },
             { "coming_soon_named", "{0} ещё не выложен.\n\nСкоро." },
             { "desc_redovah", "Сборка Skyrim AE + VR" },
-            { "desc_flappy", "Skyrim AE — закрытый тест" },
-            { "access_title", "Закрытый тест" },
-            { "access_hint", "{0} в закрытом тесте.\nВставьте фразу из Discord-чата." },
+            { "desc_flappy", "Skyrim AE — закрытый релиз" },
+            { "access_title", "Закрытый релиз" },
+            { "access_hint", "{0} — временный закрытый релиз.\nВставьте секретную фразу из Discord." },
             { "access_ok", "Дальше" },
             { "access_bad", "Фраза не совпала." },
             { "access_rate", "Слишком много попыток. Подождите {0} мин." },
-            { "access_needed", "Для установки нужна фраза закрытого теста." },
+            { "access_needed", "Для установки нужна секретная фраза закрытого релиза." },
             { "access_offline", "Сервер доступа не отвечает." },
             { "cancelling", "Отмена…\nПодождите" },
             { "scan_fp", "Сканирование…\nОтпечатки пакетов" },
@@ -330,6 +332,8 @@ namespace FlappyReDovahLauncher
             { "admin_title", "Нужны права администратора" },
             { "admin_required", "Запускайте лаунчер только от имени администратора.\n\nИнструменты MO2 требуют эти права:\n• Generate Output-папки\n• клавиша R в RaceMenu\n• запись пути к игре в реестре\n\nБез прав администратора лаунчер закроется." },
             { "mo_missing", "Не найден ModOrganizer.exe.\nСначала Установить или Починка." },
+            { "clean_cache_ask", "Установка успешно завершена!\n\nАрхивы установки (кеш) занимают на диске: {0}\n\nХотите удалить установочные архивы для освобождения места?\n\n⚠️ ВНИМАНИЕ:\n• При удалении освободится {0} на диске.\n• Однако при последующей починке игры (Repair) или переустановке недостающие архивы придется загружать по новой из сети.\n• Если вы раздаете торрент, удаление архивов остановит раздачу." },
+            { "clean_cache_done", "Освобождено {0} места на диске." },
         };
     }
 }

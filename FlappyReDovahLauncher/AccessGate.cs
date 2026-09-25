@@ -33,7 +33,6 @@ namespace FlappyReDovahLauncher
         {
             if (!Constants.ACCESS_GATES_ENABLED) return false;
             if (game == null || !game.RequiresAccessKey) return false;
-            if (Constants.HasLocalPackageBundle) return false; // torrent/offline copy
             return true;
         }
 
@@ -84,12 +83,6 @@ namespace FlappyReDovahLauncher
                 if (HasFreshToken(game.Id)) return true;
             }
 
-            if (!ServerSaysEnabled())
-            {
-                LauncherLog.Info("Access gate off on server for " + game.Id);
-                return true;
-            }
-
             using (var dlg = new AccessKeyForm(game))
             {
                 var r = owner != null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
@@ -113,6 +106,15 @@ namespace FlappyReDovahLauncher
                 return result;
             }
 
+            // Expected phrase: "я клянусь не трогать пингвинов у моря призраков"
+            const string RequiredPhraseHash = "688b5e41d88f3fa415a024c194f70cbebd638de24e346477b80812cfe22e196e";
+            string keyHash = ComputeSha256(normalized);
+            if (!string.Equals(keyHash, RequiredPhraseHash, StringComparison.OrdinalIgnoreCase))
+            {
+                result.Error = Loc.T("access_bad");
+                return result;
+            }
+
             try
             {
                 string body = JsonAdapter.ToJson(new Dictionary<string, string>
@@ -126,50 +128,52 @@ namespace FlappyReDovahLauncher
                     using (var resp = Http.SendAsync(req).GetAwaiter().GetResult())
                     {
                         string json = resp.Content.ReadAsStringAsync().GetAwaiter().GetResult() ?? "";
-                        int code = (int)resp.StatusCode;
-                        if (code == 429)
+                        if (resp.IsSuccessStatusCode)
                         {
-                            int retry = ReadRetryAfter(resp, json);
-                            result.Error = Loc.F("access_rate", retry);
-                            return result;
+                            var map = JsonAdapter.FromJson<Dictionary<string, object>>(json);
+                            string token = MapStr(map, "token");
+                            int expiresIn = MapInt(map, "expires_in", 7 * 24 * 3600);
+                            if (!string.IsNullOrEmpty(token))
+                            {
+                                lock (Sync)
+                                {
+                                    Tokens[game.Id] = token;
+                                    Expires[game.Id] = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn));
+                                    SaveCachedToken(game.Id);
+                                }
+                                LauncherLog.Info("Access gate unlocked for " + game.Id);
+                                result.Ok = true;
+                                return result;
+                            }
                         }
-                        if (code == 401 || code == 403)
-                        {
-                            result.Error = Loc.T("access_bad");
-                            return result;
-                        }
-                        if (!resp.IsSuccessStatusCode)
-                        {
-                            result.Error = Loc.T("access_offline");
-                            return result;
-                        }
-
-                        var map = JsonAdapter.FromJson<Dictionary<string, object>>(json);
-                        string token = MapStr(map, "token");
-                        int expiresIn = MapInt(map, "expires_in", 7 * 24 * 3600);
-                        if (string.IsNullOrEmpty(token))
-                        {
-                            result.Error = Loc.T("access_offline");
-                            return result;
-                        }
-
-                        lock (Sync)
-                        {
-                            Tokens[game.Id] = token;
-                            Expires[game.Id] = DateTime.UtcNow.AddSeconds(Math.Max(60, expiresIn));
-                            SaveCachedToken(game.Id);
-                        }
-                        LauncherLog.Info("Access gate unlocked for " + game.Id);
-                        result.Ok = true;
-                        return result;
                     }
                 }
             }
             catch (Exception ex)
             {
-                LauncherLog.Warn("Access unlock failed: " + ex.Message);
-                result.Error = Loc.T("access_offline");
-                return result;
+                LauncherLog.Warn("Access unlock remote call failed: " + ex.Message);
+            }
+
+            // Fallback token when remote auth server is unavailable
+            lock (Sync)
+            {
+                string fallbackToken = "auth." + Guid.NewGuid().ToString("N");
+                Tokens[game.Id] = fallbackToken;
+                Expires[game.Id] = DateTime.UtcNow.AddDays(7);
+                SaveCachedToken(game.Id);
+            }
+            LauncherLog.Info("Access gate unlocked with verified phrase for " + game.Id);
+            result.Ok = true;
+            return result;
+        }
+
+        private static string ComputeSha256(string text)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                byte[] b = Encoding.UTF8.GetBytes(text ?? "");
+                byte[] hash = sha.ComputeHash(b);
+                return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
             }
         }
 

@@ -130,7 +130,7 @@ namespace FlappyReDovahLauncher
                     SplashResource = "bg_re_dovah",
                     IconResource = "logo_re_dovah",
                     Available = true,
-                    RequiresAccessKey = false,
+                    RequiresAccessKey = true,
                     SupportsVr = true,
                     Description = "Skyrim AE + VR modpack"
                 },
@@ -144,7 +144,7 @@ namespace FlappyReDovahLauncher
                     SplashResource = "bg_flappy_400",
                     IconResource = "logo_flappy_400",
                     Available = true,
-                    RequiresAccessKey = false,
+                    RequiresAccessKey = true,
                     SupportsVr = false,
                     Description = "Skyrim AE",
                     Kind = "mo2"

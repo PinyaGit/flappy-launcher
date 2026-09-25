@@ -1731,7 +1731,8 @@ namespace FlappyReDovahLauncher
                     : (channel == InstallChannel.AeOnly ? Loc.T("preparing_ae") : Loc.T("preparing_vr")),
                 (index, report, cancel) => PackageInstaller.InstallAll(index, report, cancel, channel),
                 Loc.T("fail_install"),
-                launchAfter: Constants.AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING);
+                launchAfter: Constants.AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING,
+                isInstall: true);
         }
 
         private void StartRepairAsync()
@@ -1922,7 +1923,8 @@ namespace FlappyReDovahLauncher
             string startStatus,
             Action<PackageInstaller.Index, PackageInstaller.ProgressHandler, CancellationToken> work,
             string errorTitle,
-            bool launchAfter)
+            bool launchAfter,
+            bool isInstall = false)
         {
             if (_busy) return;
             if (!GameCatalog.Current.Available)
@@ -1977,10 +1979,80 @@ namespace FlappyReDovahLauncher
                     OnlineVersion = PackageInstaller.ParseVersion(_cachedIndex.version);
                 RefreshVersionText();
                 IsReady = true;
+
+                if (isInstall)
+                    PromptCleanInstallCache();
+
                 if (launchAfter && Constants.AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING)
                     LaunchGamePackageMode();
             };
             bw.RunWorkerAsync();
+        }
+
+        private void PromptCleanInstallCache()
+        {
+            try
+            {
+                string bundleDir = GameCatalog.LocalBundleDirectory;
+                string cacheDir = GameCatalog.DownloadCacheDir;
+
+                long totalBytes = 0;
+                var filesToDelete = new List<string>();
+
+                if (!string.IsNullOrEmpty(bundleDir) && Directory.Exists(bundleDir))
+                {
+                    string pkgs = Path.Combine(bundleDir, "packages");
+                    if (Directory.Exists(pkgs))
+                    {
+                        foreach (var f in Directory.GetFiles(pkgs, "*.7z", SearchOption.AllDirectories))
+                        {
+                            try
+                            {
+                                var fi = new FileInfo(f);
+                                totalBytes += fi.Length;
+                                filesToDelete.Add(f);
+                            }
+                            catch { }
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(cacheDir) && Directory.Exists(cacheDir))
+                {
+                    foreach (var f in Directory.GetFiles(cacheDir, "*.7z", SearchOption.AllDirectories))
+                    {
+                        try
+                        {
+                            var fi = new FileInfo(f);
+                            totalBytes += fi.Length;
+                            filesToDelete.Add(f);
+                        }
+                        catch { }
+                    }
+                }
+
+                if (filesToDelete.Count == 0 || totalBytes < 50L * 1024 * 1024)
+                    return;
+
+                string sizeStr = FormatApproxSize(totalBytes);
+                string msg = Loc.F("clean_cache_ask", sizeStr);
+
+                var res = MessageBox.Show(this, msg, GameCatalog.Current.Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                if (res == DialogResult.Yes)
+                {
+                    int deleted = 0;
+                    foreach (var f in filesToDelete)
+                    {
+                        try { File.Delete(f); deleted++; } catch { }
+                    }
+                    LauncherLog.Info("Cleaned install cache: " + deleted + " files, " + sizeStr + " freed.");
+                    MessageBox.Show(this, Loc.F("clean_cache_done", sizeStr), GameCatalog.Current.Title, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("PromptCleanInstallCache failed: " + ex.Message);
+            }
         }
 
         private void LaunchGamePackageMode()

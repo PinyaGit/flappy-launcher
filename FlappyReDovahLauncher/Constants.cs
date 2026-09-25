@@ -109,7 +109,7 @@ namespace FlappyReDovahLauncher
         /// Master switch for closed-test keys. False = never prompt, never send Bearer.
         /// Server <c>CDN_GATE_ENABLED=0</c> also opens /flappy/ without a launcher rebuild.
         /// </summary>
-        public static bool ACCESS_GATES_ENABLED = false;
+        public static bool ACCESS_GATES_ENABLED = true;
 
         public static string ACCESS_UNLOCK_URL
         {
