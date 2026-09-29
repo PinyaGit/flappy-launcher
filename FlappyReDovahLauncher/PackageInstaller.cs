@@ -1495,21 +1495,6 @@ namespace FlappyReDovahLauncher
 
         public static void CaptureOfficialModlists()
         {
-            Directory.CreateDirectory(OfficialModlistDir);
-            string profiles = Path.Combine(GameRootPath, "profiles");
-            if (!Directory.Exists(profiles)) return;
-            foreach (var dir in Directory.GetDirectories(profiles))
-            {
-                string name = Path.GetFileName(dir);
-                string snap = Path.Combine(OfficialOrderDir, name);
-                Directory.CreateDirectory(snap);
-                foreach (string file in OfficialOrderFiles)
-                {
-                    string src = Path.Combine(dir, file);
-                    if (File.Exists(src))
-                        File.Copy(src, Path.Combine(snap, file), true);
-                }
-            }
         }
 
         public static HashSet<string> GetOfficialModNames(Index index)
@@ -1538,63 +1523,24 @@ namespace FlappyReDovahLauncher
         }
 
         /// <summary>
-        /// Overlay official modlist / plugins / loadorder onto every profile.
-        /// Client list and order must match the packed pack. Saves are not touched.
-        /// Extra folders in mods\ are moved out so MO2 does not append them disabled.
-        /// User-installed mods → UserMods next to the launcher. Pack-removed mods are deleted.
+        /// Profiles and their modlist/plugins are unpacked directly from official packages.
+        /// Stale snapshots are not restored. Extra folders in mods\ are moved to UserMods.
+        /// Pack-removed mods are deleted.
         /// </summary>
         public static void RestoreModOrder(Index index)
         {
-            string profiles = Path.Combine(GameRootPath, "profiles");
-            if (!Directory.Exists(profiles)) return;
-
-            // Ensure initial official snapshot exists if missing
-            if (!Directory.Exists(OfficialOrderDir) || Directory.GetDirectories(OfficialOrderDir).Length == 0)
+            try
             {
-                try { CaptureOfficialModlists(); } catch { }
+                if (Directory.Exists(OfficialOrderDir))
+                    DeleteDirectoryRobust(OfficialOrderDir);
             }
+            catch { }
 
             var lastOfficial = LoadOfficialNames();
             HashSet<string> newOfficial = null;
             if (index != null && index.units != null)
             {
                 newOfficial = GetOfficialModNames(index);
-            }
-
-            // Fallback if index wasn't provided or had 0 mods: parse from official snapshots
-            if (newOfficial == null || newOfficial.Count == 0)
-            {
-                newOfficial = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var profileDir in Directory.GetDirectories(profiles))
-                {
-                    string profileName = Path.GetFileName(profileDir);
-                    string snap = Path.Combine(OfficialOrderDir, profileName);
-                    if (Directory.Exists(snap))
-                    {
-                        foreach (string n in ParseModlistNames(Path.Combine(snap, "modlist.txt")))
-                            newOfficial.Add(n);
-                    }
-                }
-            }
-
-            // Apply official order files onto each profile
-            foreach (var profileDir in Directory.GetDirectories(profiles))
-            {
-                string profileName = Path.GetFileName(profileDir);
-                string snap = Path.Combine(OfficialOrderDir, profileName);
-                if (!Directory.Exists(snap))
-                    continue;
-
-                int copied = 0;
-                foreach (string file in OfficialOrderFiles)
-                {
-                    string src = Path.Combine(snap, file);
-                    if (!File.Exists(src)) continue;
-                    File.Copy(src, Path.Combine(profileDir, file), true);
-                    copied++;
-                }
-                if (copied > 0)
-                    LauncherLog.Info("official order applied: " + profileName + " files=" + copied);
             }
 
             if (newOfficial != null && newOfficial.Count > 0)
@@ -1612,10 +1558,6 @@ namespace FlappyReDovahLauncher
             if (!Directory.Exists(profilesDir)) return;
 
             CleanModlistInDirectory(profilesDir, officialMods);
-            if (Directory.Exists(OfficialOrderDir))
-            {
-                CleanModlistInDirectory(OfficialOrderDir, officialMods);
-            }
         }
 
         private static void CleanModlistInDirectory(string baseDir, HashSet<string> officialMods)

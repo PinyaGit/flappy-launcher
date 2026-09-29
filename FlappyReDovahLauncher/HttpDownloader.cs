@@ -226,29 +226,26 @@ namespace FlappyReDovahLauncher
 
             if (expectedSize > 0 && len != expectedSize)
             {
-                long diff = Math.Abs(len - expectedSize);
-                if (diff > 64 * 1024)
-                {
-                    throw new FlappyException(
-                        "Package size mismatch.\nExpected " + expectedSize +
-                        " bytes, got " + len + ".\n\nFile: " + Path.GetFileName(path));
-                }
-                LauncherLog.Warn(string.Format(
-                    "Size drift accepted for {0}: index={1} actual={2}",
-                    Path.GetFileName(path), expectedSize, len));
+                throw new FlappyException(
+                    "Package size mismatch.\nExpected " + expectedSize +
+                    " bytes, got " + len + ".\n\nFile: " + Path.GetFileName(path));
             }
 
-            // Full SHA for HTTP downloads. Local torrent: size + 7z magic (BitTorrent already verified).
-            if (!skipFullSha && !string.IsNullOrWhiteSpace(expectedSha256))
+            // Full SHA for HTTP downloads and small local packages (< 10 MB, e.g. profiles/configs).
+            // Large local torrent files: exact size match + 7z magic (BitTorrent verified).
+            bool verifySha = !skipFullSha || (len < 10 * 1024 * 1024);
+            if (verifySha && !string.IsNullOrWhiteSpace(expectedSha256))
             {
                 string actual = ComputeFileSha256(path, cancel);
                 if (!string.Equals(actual, expectedSha256.Trim(), StringComparison.OrdinalIgnoreCase))
                 {
-                    try { File.Delete(path); } catch { }
+                    if (!skipFullSha)
+                    {
+                        try { File.Delete(path); } catch { }
+                    }
                     throw new FlappyException(
                         "Package checksum failed (file corrupted or incomplete).\n\n" +
-                        "File: " + Path.GetFileName(path) + "\n" +
-                        "It was removed from download_cache — retry the install.");
+                        "File: " + Path.GetFileName(path));
                 }
                 LauncherLog.Info("SHA256 OK " + Path.GetFileName(path));
             }
