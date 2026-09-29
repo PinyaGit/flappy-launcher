@@ -1410,6 +1410,12 @@ namespace FlappyReDovahLauncher
                 Extract7z(archive, tmp);
                 if (Directory.Exists(destDir))
                 {
+                    string oldMeta = Path.Combine(destDir, "meta.ini");
+                    string newMeta = Path.Combine(tmp, "meta.ini");
+                    if (File.Exists(oldMeta) && !File.Exists(newMeta))
+                    {
+                        try { File.Copy(oldMeta, newMeta, true); } catch { }
+                    }
                     DeleteDirectoryRobust(destDir);
                 }
                 Directory.Move(tmp, destDir);
