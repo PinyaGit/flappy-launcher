@@ -574,7 +574,7 @@ namespace FlappyReDovahLauncher
             return ComputeFolderFingerprint(folderAbs, folderRel, false);
         }
 
-        private static string ComputeFolderFingerprint(string folderAbs, string folderRel, bool includeMetaIni)
+        private static string ComputeFolderFingerprint(string folderAbs, string folderRel, bool includeMetaIni, bool ignoreTimestampBackups = true)
         {
             if (string.IsNullOrEmpty(folderAbs) || !Directory.Exists(folderAbs))
                 return null;
@@ -594,7 +594,7 @@ namespace FlappyReDovahLauncher
                 catch { continue; }
 
                 string sub = f.Substring(baseLen).TrimStart('\\', '/');
-                if (IsVolatileRelPath(folderRel, sub, includeMetaIni))
+                if (IsVolatileRelPath(folderRel, sub, includeMetaIni, ignoreTimestampBackups))
                     continue;
 
                 string rel = string.IsNullOrEmpty(folderRel)
@@ -621,19 +621,42 @@ namespace FlappyReDovahLauncher
 
             // Older indexes hashed meta.ini; MO2 rewrites it constantly.
             string legacy = ComputeUnitFingerprint(unit, true);
-            return !string.IsNullOrEmpty(legacy)
-                && string.Equals(legacy, expected, StringComparison.OrdinalIgnoreCase);
+            if (!string.IsNullOrEmpty(legacy)
+                && string.Equals(legacy, expected, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Some mod archives contain packaged backup files (.backup.YYYY_MM_DD_...) that the server builder did not ignore
+            string withoutBackupFilter = ComputeUnitFingerprint(unit, false, ignoreTimestampBackups: false);
+            if (!string.IsNullOrEmpty(withoutBackupFilter)
+                && string.Equals(withoutBackupFilter, expected, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            // Root files unit: MO2 modifies ModOrganizer.ini and creates fomod.db on first launch.
+            // If this root unit was already successfully applied and core binaries exist, do not trigger false repair.
+            if (IsRootUnit(unit))
+            {
+                string applied = GetAppliedSha(unit.id);
+                string want = GetUnitStamp(unit);
+                if (!string.IsNullOrEmpty(applied) && string.Equals(applied, want, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (File.Exists(Path.Combine(GameRootPath, "ModOrganizer.exe")) &&
+                        File.Exists(Path.Combine(GameRootPath, "usvfs_x64.dll")))
+                        return true;
+                }
+            }
+
+            return false;
         }
 
-        private static string ComputeUnitFingerprint(PackageUnit unit, bool includeMetaIni = false)
+        private static string ComputeUnitFingerprint(PackageUnit unit, bool includeMetaIni = false, bool ignoreTimestampBackups = true)
         {
             if (IsRootUnit(unit))
-                return ComputeRootFilesFingerprint(includeMetaIni);
+                return ComputeRootFilesFingerprint(includeMetaIni, ignoreTimestampBackups);
 
             string dest = ResolveExtractDir(unit);
             if (!Directory.Exists(dest)) return null;
             string folderRel = (unit.path ?? "").Replace('/', '\\').TrimEnd('\\');
-            return ComputeFolderFingerprint(dest, folderRel, includeMetaIni);
+            return ComputeFolderFingerprint(dest, folderRel, includeMetaIni, ignoreTimestampBackups);
         }
 
         public static bool IsUserDataUnit(PackageUnit unit)
@@ -691,10 +714,10 @@ namespace FlappyReDovahLauncher
             return string.IsNullOrEmpty(unit.path) || unit.path == ".";
         }
 
-        private static bool IsVolatileFile(string fileName, bool includeMetaIni = false)
+        private static bool IsVolatileFile(string fileName, bool includeMetaIni = false, bool ignoreTimestampBackups = true)
         {
             if (string.IsNullOrEmpty(fileName)) return true;
-            if (Regex.IsMatch(fileName, @"\.\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")) return true;
+            if (ignoreTimestampBackups && Regex.IsMatch(fileName, @"\.\d{4}_\d{2}_\d{2}_\d{2}_\d{2}_\d{2}$")) return true;
             if (fileName.Equals("desktop.ini", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.Equals("Thumbs.db", StringComparison.OrdinalIgnoreCase)) return true;
             if (fileName.Equals("imgui.ini", StringComparison.OrdinalIgnoreCase)) return true;
@@ -708,9 +731,9 @@ namespace FlappyReDovahLauncher
 
         private static readonly string[] StockGameJunkDirs = { "enbcache", "default", "Profile", "Skyrim" };
 
-        private static bool IsVolatileRelPath(string folderRel, string sub, bool includeMetaIni = false)
+        private static bool IsVolatileRelPath(string folderRel, string sub, bool includeMetaIni = false, bool ignoreTimestampBackups = true)
         {
-            if (IsVolatileFile(Path.GetFileName(sub), includeMetaIni)) return true;
+            if (IsVolatileFile(Path.GetFileName(sub), includeMetaIni, ignoreTimestampBackups)) return true;
             string top = (folderRel ?? "").Replace('/', '\\').Trim('\\');
             int slash = top.IndexOf('\\');
             if (slash >= 0) top = top.Substring(0, slash);
@@ -738,14 +761,14 @@ namespace FlappyReDovahLauncher
             return false;
         }
 
-        private static string ComputeRootFilesFingerprint(bool includeMetaIni = false)
+        private static string ComputeRootFilesFingerprint(bool includeMetaIni = false, bool ignoreTimestampBackups = true)
         {
             if (!Directory.Exists(GameRootPath)) return null;
             var lines = new List<string>();
             foreach (string f in Directory.GetFiles(GameRootPath))
             {
                 string name = Path.GetFileName(f);
-                if (IsIgnoredRootFile(name) || IsVolatileFile(name, includeMetaIni)) continue;
+                if (IsIgnoredRootFile(name) || IsVolatileFile(name, includeMetaIni, ignoreTimestampBackups)) continue;
                 try
                 {
                     var fi = new FileInfo(f);
@@ -764,6 +787,7 @@ namespace FlappyReDovahLauncher
             if (name.Equals(".flappy_installed", StringComparison.OrdinalIgnoreCase)) return true;
             if (name.Equals(".flappy_mode", StringComparison.OrdinalIgnoreCase)) return true;
             if (name.Equals(".flappy_channel", StringComparison.OrdinalIgnoreCase)) return true;
+            if (name.Equals("fomod.db", StringComparison.OrdinalIgnoreCase)) return true;
             if (name.StartsWith("Diff_", StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
@@ -1106,12 +1130,6 @@ namespace FlappyReDovahLauncher
                         Extract7zAtomic(local, dest);
                     else
                         Extract7z(local, dest);
-
-                    if (IsModUnit(unit))
-                    {
-                        try { SyncDeleteExtraFiles(unit, dest, local); }
-                        catch (Exception ex) { LauncherLog.Warn("sync-delete " + name + ": " + ex.Message); }
-                    }
 
                     string idKey = unit.id ?? ShortName(name);
                     if (!keepSource.ContainsKey(idKey))
@@ -1835,11 +1853,13 @@ namespace FlappyReDovahLauncher
             {
                 FileName = sevenZip,
                 WorkingDirectory = Path.GetDirectoryName(sevenZip),
-                Arguments = "l -slt -- \"" + archive + "\"",
+                Arguments = "l -slt -sccUTF-8 -- \"" + archive + "\"",
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,
-                RedirectStandardError = true
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
             };
             psi.EnvironmentVariables["PATH"] = Path.GetDirectoryName(sevenZip) + ";" + Environment.GetFolderPath(Environment.SpecialFolder.System);
             using (var p = Process.Start(psi))
