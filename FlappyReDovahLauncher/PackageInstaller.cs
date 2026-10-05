@@ -188,6 +188,80 @@ namespace FlappyReDovahLauncher
             }
         }
 
+        public static string PinnedVersionFilePath
+        {
+            get { return Path.Combine(GameRootPath, ".flappy_pinned_version"); }
+        }
+
+        public static bool IsVersionPinned()
+        {
+            try
+            {
+                if (!File.Exists(PinnedVersionFilePath)) return false;
+                string v = File.ReadAllText(PinnedVersionFilePath, Encoding.UTF8).Trim();
+                return !string.IsNullOrEmpty(v);
+            }
+            catch { return false; }
+        }
+
+        public static string GetPinnedVersion()
+        {
+            try
+            {
+                if (!File.Exists(PinnedVersionFilePath)) return null;
+                string v = File.ReadAllText(PinnedVersionFilePath, Encoding.UTF8).Trim();
+                return string.IsNullOrEmpty(v) ? null : v;
+            }
+            catch { return null; }
+        }
+
+        public static void SetPinnedVersion(string versionOrNull)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(versionOrNull))
+                {
+                    if (File.Exists(PinnedVersionFilePath))
+                        File.Delete(PinnedVersionFilePath);
+                }
+                else
+                {
+                    Directory.CreateDirectory(GameRootPath);
+                    File.WriteAllText(PinnedVersionFilePath, versionOrNull.Trim(), Encoding.UTF8);
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("SetPinnedVersion failed: " + ex.Message);
+            }
+        }
+
+        public static VersionsManifest FetchVersionsManifest()
+        {
+            try
+            {
+                string url = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, "versions.json");
+                string json = HttpDownloader.ReadAllText(url);
+                return JsonAdapter.FromJson<VersionsManifest>(json);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("FetchVersionsManifest failed: " + ex.Message);
+                return null;
+            }
+        }
+
+        public static Index FetchIndexForVersion(VersionEntry entry)
+        {
+            if (entry == null || string.IsNullOrEmpty(entry.index))
+                throw new FlappyException("Invalid version entry.");
+
+            string url = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, entry.index);
+            string json = HttpDownloader.ReadAllText(url);
+            var idx = DeserializeIndex(json);
+            return idx;
+        }
+
         public static InstallChannel GetSavedChannel()
         {
             try
@@ -445,6 +519,7 @@ namespace FlappyReDovahLauncher
         {
             if (busy) return PlayButtonState.Busy;
             if (!installed) return PlayButtonState.Install;
+            if (IsVersionPinned()) return PlayButtonState.Play;
             if (online != null && local < online) return PlayButtonState.Update;
             // installed but fingerprint drift still allows Play; Update only on version
             return PlayButtonState.Play;
@@ -495,6 +570,25 @@ namespace FlappyReDovahLauncher
             bool update = IsInstalled();
             if (!update && !CanFreshInstall())
                 throw new FlappyException(Loc.T("need_torrent"));
+
+            if (update && CanApplyDelta(index, channel))
+            {
+                try
+                {
+                    LauncherLog.Info("Applying single-archive delta patch from v" + index.delta.fromVersion + " to v" + index.version);
+                    ApplyDeltaUpdate(index, progress, cancel, channel);
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LauncherLog.Warn("Delta update failed, falling back to full unit repair: " + ex.Message);
+                }
+            }
+
             InstallOrRepair(index, progress, cancel,
                 onlyMismatched: update,
                 wipeMismatched: false,
@@ -509,6 +603,15 @@ namespace FlappyReDovahLauncher
                 wipeMismatched: true,
                 channel: channel,
                 jobName: Loc.T("job_repair"));
+        }
+
+        public static void RollbackToVersion(Index index, ProgressHandler progress, CancellationToken cancel, InstallChannel channel)
+        {
+            InstallOrRepair(index, progress, cancel,
+                onlyMismatched: true,
+                wipeMismatched: true,
+                channel: channel,
+                jobName: Loc.IsRu ? ("Откат на v" + index.version) : ("Rollback to v" + index.version));
         }
 
         public static List<PackageUnit> FindUnitsNeedingRepair(
@@ -1455,7 +1558,7 @@ namespace FlappyReDovahLauncher
 
         /// <summary>
         /// Overlay a profile archive onto an existing profile: copy packed files except saves.
-        /// Client saves stay. Official modlist/plugins/loadorder come from the archive.
+        /// Client saves stay. Official modlist/plugins/loadorder are smart merged.
         /// </summary>
         private static void OverlayProfileArchive(string archive, string destDir)
         {
@@ -1477,7 +1580,24 @@ namespace FlappyReDovahLauncher
                     string parent = Path.GetDirectoryName(target);
                     if (!string.IsNullOrEmpty(parent))
                         Directory.CreateDirectory(parent);
-                    File.Copy(f, target, true);
+
+                    string fileName = Path.GetFileName(rel);
+                    if (string.Equals(fileName, "modlist.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SmartMergeModlistFile(f, target);
+                    }
+                    else if (string.Equals(fileName, "plugins.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SmartMergePluginsFile(f, target);
+                    }
+                    else if (string.Equals(fileName, "loadorder.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SmartMergeLoadorderFile(f, target);
+                    }
+                    else
+                    {
+                        File.Copy(f, target, true);
+                    }
                     copied++;
                 }
                 LauncherLog.Info("profile overlay files=" + copied + " dest=" + destDir);
@@ -1486,6 +1606,400 @@ namespace FlappyReDovahLauncher
             {
                 try { if (Directory.Exists(tmp)) DeleteDirectoryRobust(tmp); } catch { }
             }
+        }
+
+        public static void SmartMergeModlistFile(string officialPath, string clientPath)
+        {
+            if (!File.Exists(clientPath))
+            {
+                if (File.Exists(officialPath)) File.Copy(officialPath, clientPath, true);
+                return;
+            }
+            if (!File.Exists(officialPath)) return;
+
+            try
+            {
+                var clientLines = File.ReadAllLines(clientPath);
+                var clientModStates = new Dictionary<string, char>(StringComparer.OrdinalIgnoreCase);
+                foreach (var cl in clientLines)
+                {
+                    string t = (cl ?? "").Trim();
+                    if (t.Length == 0 || t[0] == '#') continue;
+                    char prefix = t[0];
+                    if (prefix == '+' || prefix == '-')
+                    {
+                        string name = t.Substring(1).Trim();
+                        if (!string.IsNullOrEmpty(name))
+                            clientModStates[name] = prefix;
+                    }
+                }
+
+                var officialLines = File.ReadAllLines(officialPath);
+                var officialSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var merged = new List<string>(officialLines.Length + clientModStates.Count);
+
+                foreach (var ol in officialLines)
+                {
+                    string t = (ol ?? "").Trim();
+                    if (t.Length == 0 || t[0] == '#')
+                    {
+                        merged.Add(ol);
+                        continue;
+                    }
+
+                    if (t.EndsWith("_separator", StringComparison.OrdinalIgnoreCase) || t[0] == '*')
+                    {
+                        merged.Add(ol);
+                        continue;
+                    }
+
+                    if (t[0] == '+' || t[0] == '-')
+                    {
+                        string name = t.Substring(1).Trim();
+                        officialSeen.Add(name);
+                        char userPrefix;
+                        if (clientModStates.TryGetValue(name, out userPrefix))
+                        {
+                            merged.Add(userPrefix + name);
+                        }
+                        else
+                        {
+                            merged.Add(ol);
+                        }
+                        continue;
+                    }
+
+                    merged.Add(ol);
+                }
+
+                foreach (var pair in clientModStates)
+                {
+                    if (!officialSeen.Contains(pair.Key) && !pair.Key.EndsWith("_separator", StringComparison.OrdinalIgnoreCase))
+                    {
+                        merged.Add(pair.Value + pair.Key);
+                    }
+                }
+
+                File.WriteAllLines(clientPath, merged.ToArray(), new UTF8Encoding(false));
+                LauncherLog.Info("SmartMergeModlistFile merged " + Path.GetFileName(clientPath));
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("SmartMergeModlistFile failed, falling back to copy: " + ex.Message);
+                try { File.Copy(officialPath, clientPath, true); } catch { }
+            }
+        }
+
+        public static void SmartMergePluginsFile(string officialPath, string clientPath)
+        {
+            if (!File.Exists(clientPath))
+            {
+                if (File.Exists(officialPath)) File.Copy(officialPath, clientPath, true);
+                return;
+            }
+            if (!File.Exists(officialPath)) return;
+
+            try
+            {
+                var clientLines = File.ReadAllLines(clientPath);
+                var clientStates = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+                foreach (var cl in clientLines)
+                {
+                    string t = (cl ?? "").Trim();
+                    if (t.Length == 0 || t[0] == '#') continue;
+                    bool enabled = t.StartsWith("*");
+                    string name = (enabled ? t.Substring(1) : t).Trim();
+                    if (!string.IsNullOrEmpty(name))
+                        clientStates[name] = enabled;
+                }
+
+                var officialLines = File.ReadAllLines(officialPath);
+                var officialSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var merged = new List<string>(officialLines.Length + clientStates.Count);
+
+                foreach (var ol in officialLines)
+                {
+                    string t = (ol ?? "").Trim();
+                    if (t.Length == 0 || t[0] == '#')
+                    {
+                        merged.Add(ol);
+                        continue;
+                    }
+
+                    bool authorEnabled = t.StartsWith("*");
+                    string name = (authorEnabled ? t.Substring(1) : t).Trim();
+                    officialSeen.Add(name);
+
+                    bool userEnabled;
+                    if (clientStates.TryGetValue(name, out userEnabled))
+                    {
+                        merged.Add(userEnabled ? ("*" + name) : name);
+                    }
+                    else
+                    {
+                        merged.Add(ol);
+                    }
+                }
+
+                foreach (var pair in clientStates)
+                {
+                    if (!officialSeen.Contains(pair.Key))
+                    {
+                        merged.Add(pair.Value ? ("*" + pair.Key) : pair.Key);
+                    }
+                }
+
+                File.WriteAllLines(clientPath, merged.ToArray(), new UTF8Encoding(false));
+                LauncherLog.Info("SmartMergePluginsFile merged " + Path.GetFileName(clientPath));
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("SmartMergePluginsFile failed, falling back to copy: " + ex.Message);
+                try { File.Copy(officialPath, clientPath, true); } catch { }
+            }
+        }
+
+        public static void SmartMergeLoadorderFile(string officialPath, string clientPath)
+        {
+            if (!File.Exists(clientPath))
+            {
+                if (File.Exists(officialPath)) File.Copy(officialPath, clientPath, true);
+                return;
+            }
+            if (!File.Exists(officialPath)) return;
+
+            try
+            {
+                var clientLines = File.ReadAllLines(clientPath);
+                var officialLines = File.ReadAllLines(officialPath);
+                var officialSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var merged = new List<string>(officialLines.Length + clientLines.Length);
+
+                foreach (var ol in officialLines)
+                {
+                    string t = (ol ?? "").Trim();
+                    if (t.Length == 0 || t[0] == '#')
+                    {
+                        merged.Add(ol);
+                        continue;
+                    }
+                    officialSeen.Add(t);
+                    merged.Add(ol);
+                }
+
+                foreach (var cl in clientLines)
+                {
+                    string t = (cl ?? "").Trim();
+                    if (t.Length > 0 && t[0] != '#' && !officialSeen.Contains(t))
+                    {
+                        merged.Add(cl);
+                        officialSeen.Add(t);
+                    }
+                }
+
+                File.WriteAllLines(clientPath, merged.ToArray(), new UTF8Encoding(false));
+                LauncherLog.Info("SmartMergeLoadorderFile merged " + Path.GetFileName(clientPath));
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("SmartMergeLoadorderFile failed: " + ex.Message);
+                try { File.Copy(officialPath, clientPath, true); } catch { }
+            }
+        }
+
+        private static bool IsVrRelPath(string rel)
+        {
+            if (string.IsNullOrEmpty(rel)) return false;
+            string p = rel.Replace('/', '\\').Trim('\\');
+            if (p.StartsWith("StockGameVR", StringComparison.OrdinalIgnoreCase)) return true;
+            if (p.IndexOf("(VR)", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (p.IndexOf("Re-Dovah VR", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (p.IndexOf("VR - Re-Dovah", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (p.StartsWith("profiles\\VR", StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        public static bool CanApplyDelta(Index index, InstallChannel channel)
+        {
+            if (index == null || index.delta == null) return false;
+            if (string.IsNullOrWhiteSpace(index.delta.package)) return false;
+
+            var localVer = GetLocalVersion();
+            if (localVer.Major == 0 && localVer.Minor == 0 && localVer.Build == 0 && localVer.Revision == 0)
+                return false;
+
+            var deltaFrom = ParseVersion(index.delta.fromVersion);
+            bool verMatch = localVer.Equals(deltaFrom) ||
+                string.Equals(localVer.ToString(), (index.delta.fromVersion ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+            if (!verMatch) return false;
+
+            return true;
+        }
+
+        public static void ApplyDeltaUpdate(
+            Index index,
+            ProgressHandler progress,
+            CancellationToken cancel,
+            InstallChannel channel)
+        {
+            if (index == null || index.delta == null)
+                throw new FlappyException("No delta package information in index.");
+
+            var delta = index.delta;
+            string patchName = Path.GetFileName(delta.package);
+            string downloadMsg = Loc.IsRu ? ("Обновление: скачивание " + patchName) : ("Update: downloading " + patchName);
+            progress(5, -1, downloadMsg);
+
+            EnsureSevenZip(progress, cancel);
+
+            Directory.CreateDirectory(GameRootPath);
+            Directory.CreateDirectory(DownloadCacheDir);
+
+            // 1. Acquire delta package
+            string cdnUrl = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, delta.package);
+            string localPath = GameCatalog.GetLocalPackagePath(delta.package);
+            string cachePath = Path.Combine(DownloadCacheDir, patchName);
+
+            bool fromLocal;
+            string patchFile = HttpDownloader.AcquirePackage(
+                localPath,
+                cdnUrl,
+                cachePath,
+                delta.packageSize,
+                delta.packageSha256,
+                (recv, tot) =>
+                {
+                    int pct = (tot > 0) ? (int)Math.Min(100, Math.Max(0, (recv * 100) / tot)) : -1;
+                    progress(5 + (pct >= 0 ? (int)(pct * 0.45) : 0), pct, downloadMsg);
+                },
+                cancel,
+                out fromLocal);
+
+            // 2. Extract delta package to staging directory
+            string extractMsg = Loc.IsRu ? ("Обновление: распаковка " + patchName) : ("Update: extracting " + patchName);
+            progress(55, -1, extractMsg);
+            string stage = Path.Combine(Path.GetTempPath(), "flappy_delta_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(stage);
+
+            try
+            {
+                Extract7z(patchFile, stage);
+
+                // 3. Process manifest_delta.json if present
+                string manifestPath = Path.Combine(stage, "manifest_delta.json");
+                if (File.Exists(manifestPath))
+                {
+                    try
+                    {
+                        string json = File.ReadAllText(manifestPath, Encoding.UTF8);
+                        var manifest = JsonAdapter.FromJson<DeltaManifest>(json);
+                        if (manifest != null && manifest.deletedPaths != null && manifest.deletedPaths.Count > 0)
+                        {
+                            string cleanMsg = Loc.IsRu ? "Удаление устаревших файлов..." : "Removing obsolete files...";
+                            progress(65, -1, cleanMsg);
+                            string fullGameRoot = Path.GetFullPath(GameRootPath).TrimEnd('\\');
+                            foreach (var delRel in manifest.deletedPaths)
+                            {
+                                cancel.ThrowIfCancellationRequested();
+                                if (string.IsNullOrWhiteSpace(delRel)) continue;
+                                string safeRel = delRel.Replace('/', '\\').TrimStart('\\');
+                                string target = Path.GetFullPath(Path.Combine(fullGameRoot, safeRel));
+                                if (!target.StartsWith(fullGameRoot, StringComparison.OrdinalIgnoreCase))
+                                    continue;
+
+                                if (Directory.Exists(target))
+                                {
+                                    try { DeleteDirectoryRobust(target); }
+                                    catch (Exception ex) { LauncherLog.Warn("Delta remove dir " + safeRel + ": " + ex.Message); }
+                                }
+                                else if (File.Exists(target))
+                                {
+                                    try { File.Delete(target); }
+                                    catch (Exception ex) { LauncherLog.Warn("Delta remove file " + safeRel + ": " + ex.Message); }
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("Failed processing manifest_delta.json: " + ex.Message);
+                    }
+                }
+
+                // 4. Copy updated/new files from stage into GameRootPath
+                string applyMsg = Loc.IsRu ? "Применение обновлений..." : "Applying update files...";
+                progress(75, -1, applyMsg);
+                string[] files = Directory.GetFiles(stage, "*", SearchOption.AllDirectories);
+                int totalFiles = files.Length;
+                int currentFile = 0;
+
+                foreach (var srcFile in files)
+                {
+                    cancel.ThrowIfCancellationRequested();
+                    currentFile++;
+                    if (currentFile % 25 == 0)
+                    {
+                        int p = 75 + (int)((currentFile / (double)Math.Max(1, totalFiles)) * 20);
+                        progress(p, -1, applyMsg);
+                    }
+
+                    string rel = srcFile.Substring(stage.Length).TrimStart('\\', '/');
+                    if (string.Equals(rel, "manifest_delta.json", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    // If AE-only, skip VR files
+                    if (channel == InstallChannel.AeOnly && IsVrRelPath(rel))
+                        continue;
+
+                    // Never overwrite player saves
+                    if (IsProfileSavePath(rel))
+                        continue;
+
+                    string destFile = Path.Combine(GameRootPath, rel);
+                    string fileName = Path.GetFileName(rel);
+
+                    if (string.Equals(fileName, "modlist.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SmartMergeModlistFile(srcFile, destFile);
+                    }
+                    else if (string.Equals(fileName, "plugins.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SmartMergePluginsFile(srcFile, destFile);
+                    }
+                    else if (string.Equals(fileName, "loadorder.txt", StringComparison.OrdinalIgnoreCase))
+                    {
+                        SmartMergeLoadorderFile(srcFile, destFile);
+                    }
+                    else
+                    {
+                        string destDir = Path.GetDirectoryName(destFile);
+                        if (!string.IsNullOrEmpty(destDir))
+                            Directory.CreateDirectory(destDir);
+                        File.Copy(srcFile, destFile, true);
+                    }
+                }
+            }
+            finally
+            {
+                try { if (Directory.Exists(stage)) DeleteDirectoryRobust(stage); } catch { }
+                if (!fromLocal)
+                {
+                    try { if (File.Exists(patchFile)) File.Delete(patchFile); } catch { }
+                }
+            }
+
+            // 5. Post-apply operations
+            string finishMsg = Loc.IsRu ? "Завершение обновления..." : "Finishing update...";
+            progress(96, -1, finishMsg);
+            try { RestoreModOrder(index); } catch (Exception ex) { LauncherLog.Warn("RestoreModOrder after delta: " + ex.Message); }
+            try { ClearShaderCache(); } catch { }
+
+            SaveChannel(channel);
+            FinishInstallFlag(index.version, "Delta patch " + delta.fromVersion + " -> " + index.version);
+            SaveLocalVersion(index.version ?? "1.0.0");
+
+            progress(100, -1, Loc.F("job_complete", Loc.T("job_update"), 1));
+            LauncherLog.Info("Delta update applied successfully: " + delta.fromVersion + " -> " + index.version);
         }
 
         private static bool IsProfileSavePath(string rel)

@@ -11,7 +11,8 @@ namespace FlappyReDovahLauncher
         GetVr,
         RemoveVr,
         BugReport,
-        Uninstall
+        Uninstall,
+        Rollback
     }
 
     /// <summary>Language, repair / VR / bug report / uninstall.</summary>
@@ -36,6 +37,7 @@ namespace FlappyReDovahLauncher
         private Button _btnClearShaders;
         private Button _btnOpenLog;
         private Button _btnBug;
+        private Button _btnRollback;
         private Button _btnUninstall;
         private Button _btnClose;
 
@@ -98,15 +100,18 @@ namespace FlappyReDovahLauncher
             _btnOpenLog = FlappyTheme.MakeGoldButton("", new Point(235, 282), new Size(195, 38), primary: false);
 
             _btnBug = FlappyTheme.MakeGoldButton("", new Point(30, 328), new Size(195, 38), primary: false);
-            _btnUninstall = FlappyTheme.MakeGoldButton("", new Point(235, 328), new Size(195, 38), primary: false);
+            _btnRollback = FlappyTheme.MakeGoldButton("", new Point(235, 328), new Size(195, 38), primary: false);
+
+            _btnUninstall = FlappyTheme.MakeGoldButton("", new Point(130, 376), new Size(200, 36), primary: false);
             _btnUninstall.ForeColor = Color.FromArgb(220, 160, 140);
 
-            _btnClose = FlappyTheme.MakeGoldButton("", new Point(155, 400), new Size(150, 36), primary: false);
+            _btnClose = FlappyTheme.MakeGoldButton("", new Point(155, 422), new Size(150, 36), primary: false);
             _btnClose.DialogResult = DialogResult.Cancel;
             _btnClose.ForeColor = FlappyTheme.Mute;
             _btnClose.BackColor = FlappyTheme.CancelBack;
 
             _btnRepair.Click += (s, e) => Finish(SettingsAction.Repair);
+            _btnRollback.Click += (s, e) => Finish(SettingsAction.Rollback);
             _btnVr.Click += (s, e) => Finish(
                 PackageInstaller.GetSavedChannel() == InstallChannel.AeOnly
                     ? SettingsAction.GetVr
@@ -168,6 +173,7 @@ namespace FlappyReDovahLauncher
             Controls.Add(_btnClearShaders);
             Controls.Add(_btnOpenLog);
             Controls.Add(_btnBug);
+            Controls.Add(_btnRollback);
             Controls.Add(_btnUninstall);
             Controls.Add(_btnClose);
             CancelButton = _btnClose;
@@ -217,6 +223,7 @@ namespace FlappyReDovahLauncher
             _btnClearShaders.Text = Loc.T("clear_shaders");
             _btnOpenLog.Text = Loc.T("open_log");
             _btnBug.Text = Loc.T("bugreport");
+            _btnRollback.Text = Loc.IsRu ? "Версии / Откат" : "Versions / Rollback";
             _btnUninstall.Text = Loc.T("uninstall");
             _btnClose.Text = Loc.T("close");
 
@@ -238,6 +245,7 @@ namespace FlappyReDovahLauncher
             _btnOpenLog.Enabled = true;
             _btnUninstall.Enabled = toolsOk;
             _btnBug.Enabled = toolsOk;
+            _btnRollback.Enabled = toolsOk;
         }
 
         public static SettingsAction ShowSettings(IWin32Window owner, bool busy)

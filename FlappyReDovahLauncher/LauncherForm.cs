@@ -717,6 +717,10 @@ namespace FlappyReDovahLauncher
                     ? Loc.F("ver_not_installed", FormatShortVersion(OnlineVersion), launcher)
                     : Loc.F("ver_game_dash_only", launcher);
             }
+            else if (PackageInstaller.IsVersionPinned())
+            {
+                _versionText = "v" + FormatShortVersion(localGame) + " (📌 " + (Loc.IsRu ? "закреплена" : "pinned") + ")   v" + launcher;
+            }
             else if (OnlineVersion != null && localGame != OnlineVersion)
             {
                 _versionText = Loc.F("ver_upgrade", FormatShortVersion(localGame), FormatShortVersion(OnlineVersion), launcher);
@@ -1424,6 +1428,9 @@ namespace FlappyReDovahLauncher
                 case SettingsAction.Repair:
                     OnClickRepair();
                     break;
+                case SettingsAction.Rollback:
+                    OnClickRollback();
+                    break;
                 case SettingsAction.GetVr:
                 case SettingsAction.RemoveVr:
                     OnClickVrChannel();
@@ -1554,9 +1561,24 @@ namespace FlappyReDovahLauncher
             bw.DoWork += (o, args) =>
             {
                 var worker = (BackgroundWorker)o;
-                args.Result = BugReportPacker.Run(
+                string archive = BugReportPacker.Run(
                     (overall, current, msg) => worker.ReportProgress(0, UiProgress.Make(overall, current, msg)),
                     token);
+
+                string shareUrl = null;
+                try
+                {
+                    shareUrl = PingvinShareUploader.UploadAsync(
+                        archive,
+                        (pct, msg) => worker.ReportProgress(0, UiProgress.Make(pct, -1, msg)),
+                        token).GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    LauncherLog.Warn("PingvinShare upload failed: " + ex.Message);
+                }
+
+                args.Result = new Tuple<string, string>(archive, shareUrl);
             };
             bw.ProgressChanged += (o, args) =>
             {
@@ -1573,10 +1595,20 @@ namespace FlappyReDovahLauncher
                     IsReady = PackageInstaller.IsInstalled();
                     return;
                 }
-                string archive = args.Result as string;
+                var res = args.Result as Tuple<string, string>;
+                string archive = res != null ? res.Item1 : null;
+                string shareUrl = res != null ? res.Item2 : null;
                 _statusText = Loc.T("ready");
                 IsReady = PackageInstaller.IsInstalled();
-                if (!string.IsNullOrEmpty(archive))
+
+                if (!string.IsNullOrEmpty(shareUrl))
+                {
+                    using (var dlg = new BugReportResultForm(shareUrl, archive))
+                    {
+                        dlg.ShowDialog(this);
+                    }
+                }
+                else if (!string.IsNullOrEmpty(archive))
                 {
                     MessageBox.Show(
                         Loc.F("bugreport_done", archive) + Environment.NewLine + Environment.NewLine + Loc.T("bugreport_open_folder"),
@@ -1689,6 +1721,117 @@ namespace FlappyReDovahLauncher
             if (r != DialogResult.Yes) return;
 
             StartRepairAsync();
+        }
+
+        private void OnClickRollback()
+        {
+            if (_busy) return;
+            if (!PackageInstaller.IsInstalled())
+            {
+                MessageBox.Show(Loc.T("need_install"), Loc.IsRu ? "Выбор версии" : "Version select");
+                return;
+            }
+
+            using (var form = new RollbackForm())
+            {
+                if (form.ShowDialog(this) == DialogResult.OK)
+                {
+                    if (form.UnpinAndUpgradeRequested)
+                    {
+                        PackageInstaller.SetPinnedVersion(null);
+                        RefreshPlayState();
+                        RefreshVersionText();
+                        RedrawLayered(force: true);
+                        StartPackageInstallAsync();
+                    }
+                    else if (form.SelectedVersion != null)
+                    {
+                        if (form.PinRequested)
+                            PackageInstaller.SetPinnedVersion(form.SelectedVersion.version);
+                        else
+                            PackageInstaller.SetPinnedVersion(null);
+
+                        StartRollbackAsync(form.SelectedVersion);
+                    }
+                }
+            }
+        }
+
+        private void StartRollbackAsync(VersionEntry targetVer)
+        {
+            if (_busy) return;
+            if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
+                return;
+
+            string verStr = targetVer.version;
+            var r = MessageBox.Show(
+                Loc.IsRu
+                    ? ("Вы действительно хотите переключить игру на версию v" + verStr + "?\n\nЛаунчер проверит файлы и загрузит необходимые пакеты выбранной версии.")
+                    : ("Do you want to switch the game to version v" + verStr + "?\n\nThe launcher will verify files and download necessary packages for the selected version."),
+                Loc.IsRu ? "Подтверждение версии" : "Confirm Version",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Question);
+            if (r != DialogResult.Yes) return;
+
+            var channel = PackageInstaller.GetSavedChannel();
+            _busy = true;
+            RefreshPlayState();
+            _showProgress = true;
+            _showReady = false;
+            _statusText = Loc.IsRu ? ("Подготовка к v" + verStr + "…") : ("Preparing v" + verStr + "…");
+            _progressOverall = 0;
+            _progressCurrent = -1;
+            if (_jobCts != null) { try { _jobCts.Dispose(); } catch { } }
+            _jobCts = new CancellationTokenSource();
+            var token = _jobCts.Token;
+            RedrawLayered(force: true);
+
+            var bw = new BackgroundWorker();
+            bw.WorkerReportsProgress = true;
+            bw.DoWork += (o, args) =>
+            {
+                var worker = (BackgroundWorker)o;
+                worker.ReportProgress(0, UiProgress.Make(1, -1, Loc.IsRu ? "Получение структуры версии…" : "Fetching version index…"));
+                var targetIndex = PackageInstaller.FetchIndexForVersion(targetVer);
+                PackageInstaller.RollbackToVersion(
+                    targetIndex,
+                    (overall, current, msg) => worker.ReportProgress(0, UiProgress.Make(overall, current, msg)),
+                    token,
+                    channel);
+            };
+            bw.ProgressChanged += (o, args) =>
+            {
+                ApplyUiProgress(args.UserState);
+                RedrawLayered(force: false);
+            };
+            bw.RunWorkerCompleted += (o, args) =>
+            {
+                _busy = false;
+                _isInstalled = PackageInstaller.IsInstalled();
+                if (args.Error != null)
+                {
+                    MessageBox.Show(FlappyException.FormatForUser(args.Error), Loc.IsRu ? "Ошибка отката" : "Rollback error");
+                    IsReady = _isInstalled;
+                    RefreshPlayState();
+                    RefreshVersionText();
+                    RedrawLayered(force: true);
+                    return;
+                }
+                _statusText = Loc.T("ready");
+                _progressCurrent = -1;
+                RefreshVersionText();
+                RefreshPlayState();
+                IsReady = true;
+                RedrawLayered(force: true);
+                MessageBox.Show(
+                    Loc.IsRu
+                        ? ("Успешно переключено на версию v" + verStr + "!")
+                        : ("Successfully switched to version v" + verStr + "!"),
+                    Loc.IsRu ? "Готово" : "Complete",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+            };
+            bw.RunWorkerAsync();
         }
 
         private InstallChannel ResolveChannelForJob(bool allowPrompt)

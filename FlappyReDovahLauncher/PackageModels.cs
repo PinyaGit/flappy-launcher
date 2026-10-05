@@ -21,12 +21,46 @@ namespace FlappyReDovahLauncher
         public bool installOnce { get; set; }
     }
 
+    internal class PackageDelta
+    {
+        public string fromVersion { get; set; }
+        public string toVersion { get; set; }
+        public string package { get; set; }
+        public long packageSize { get; set; }
+        public string packageSha256 { get; set; }
+    }
+
+    internal class DeltaManifest
+    {
+        public int format { get; set; }
+        public string fromVersion { get; set; }
+        public string toVersion { get; set; }
+        public string created { get; set; }
+        public List<string> changedUnits { get; set; }
+        public List<string> deletedPaths { get; set; }
+    }
+
+    internal class VersionEntry
+    {
+        public string version { get; set; }
+        public string released { get; set; }
+        public string index { get; set; }
+    }
+
+    internal class VersionsManifest
+    {
+        public string game { get; set; }
+        public string currentVersion { get; set; }
+        public List<VersionEntry> versions { get; set; }
+    }
+
     internal class PackageIndex
     {
         public int format { get; set; }
         public string version { get; set; }
         public string gameRoot { get; set; }
         public List<PackageUnit> units { get; set; }
+        public PackageDelta delta { get; set; }
     }
 
     /// <summary>Install channel: AE-only or full AE+VR.</summary>
