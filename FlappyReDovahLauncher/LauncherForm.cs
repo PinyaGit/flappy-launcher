@@ -52,6 +52,7 @@ namespace FlappyReDovahLauncher
 
         private Rectangle _rcPlay;
         private Rectangle _rcMo;
+        private Rectangle _rcUpdate;
         private Rectangle _rcCancel;
         private Rectangle _rcDiscord;
         private Rectangle _rcBoosty;
@@ -98,6 +99,17 @@ namespace FlappyReDovahLauncher
             }
         }
 
+        private bool ShowUpdateButton
+        {
+            get
+            {
+                if (_busy) return false;
+                if (!GameCatalog.Current.Available || !_isInstalled) return false;
+                var local = PackageInstaller.GetLocalVersion();
+                return OnlineVersion != null && local < OnlineVersion;
+            }
+        }
+
         private bool ShowCancelButton
         {
             get { return _busy; }
@@ -121,13 +133,12 @@ namespace FlappyReDovahLauncher
             switch (_playState)
             {
                 case PlayButtonState.Install: _playText = Loc.T("install"); break;
-                case PlayButtonState.Update: _playText = Loc.T("update"); break;
                 case PlayButtonState.Busy: _playText = "…"; break;
                 default: _playText = Loc.T("play"); break;
             }
-            _showProgress = _busy || _playState == PlayButtonState.Install || _playState == PlayButtonState.Update;
+            _showProgress = _busy;
             if (_busy) _showReady = false;
-            else _showReady = _playState == PlayButtonState.Play;
+            else _showReady = _isInstalled;
         }
 
         protected override CreateParams CreateParams
@@ -561,16 +572,27 @@ namespace FlappyReDovahLauncher
                 _rcGames[i] = new Rectangle(iconPad, y, railTile, railTile + railLabel);
             }
 
-            // Footer (right column): Play, Mod Organizer 2 above it (Cancel replaces it while busy)
+            // Footer (right column): Play, Update and Mod Organizer 2 above it
             const int playW = 128;
-            const int moW = 176;
+            const int moW = 150;
+            const int updateW = 176;
             const int playH = 44;
             const int smallH = 32;
             const int gap = 8;
             int leftCol = iconPad + iconSize + gap + 8;
             _rcPlay = new Rectangle(w - gap - playW, h - 14 - playH, playW, playH);
-            _rcMo = new Rectangle(_rcPlay.Right - moW, _rcPlay.Top - gap - smallH, moW, smallH);
-            _rcCancel = _rcMo;
+            _rcCancel = new Rectangle(_rcPlay.Right - updateW, _rcPlay.Top - gap - smallH, updateW, smallH);
+
+            if (ShowUpdateButton)
+            {
+                _rcUpdate = new Rectangle(_rcPlay.Right - updateW, _rcPlay.Top - gap - smallH, updateW, smallH);
+                _rcMo = new Rectangle(_rcUpdate.Left - gap - moW, _rcUpdate.Top, moW, smallH);
+            }
+            else
+            {
+                _rcUpdate = Rectangle.Empty;
+                _rcMo = new Rectangle(_rcPlay.Right - moW, _rcPlay.Top - gap - smallH, moW, smallH);
+            }
 
             // Dual progress: current archive (top) + overall (bottom), left of Play
             int barRight = _rcPlay.Left - gap;
@@ -679,10 +701,39 @@ namespace FlappyReDovahLauncher
                         ? Loc.T("ready_install")
                         : Loc.T("need_torrent_short");
                 }
-                else if (Constants.AUTOMATICALLY_BEGIN_UPDATING && !upToDate)
+                else if (!upToDate)
                 {
-                    LauncherLog.Info("Auto-update enabled — starting");
-                    StartPackageInstallAsync();
+                    if (Constants.AUTOMATICALLY_BEGIN_UPDATING)
+                    {
+                        LauncherLog.Info("Auto-update enabled — starting");
+                        StartPackageInstallAsync();
+                    }
+                    else if (!PackageInstaller.IsVersionPinned())
+                    {
+                        string onlStr = OnlineVersion != null ? FormatShortVersion(OnlineVersion) : "?";
+                        string locStr = local != null ? FormatShortVersion(local) : "?";
+                        var ask = MessageBox.Show(
+                            this,
+                            Loc.IsRu
+                                ? ("Вышло обновление " + game.Title + " v" + onlStr + "!\nВаша установленная версия: v" + locStr + ".\n\nХотите обновиться сейчас?")
+                                : ("An update for " + game.Title + " (v" + onlStr + ") is available!\nYour installed version: v" + locStr + ".\n\nDo you want to update now?"),
+                            Loc.IsRu ? "Доступно обновление" : "Update Available",
+                            MessageBoxButtons.YesNo,
+                            MessageBoxIcon.Question);
+
+                        if (ask == DialogResult.Yes)
+                        {
+                            PackageInstaller.SetPinnedVersion(null);
+                            StartPackageInstallAsync();
+                            return;
+                        }
+                        else
+                        {
+                            PackageInstaller.SetPinnedVersion(local.ToString());
+                            RefreshVersionText();
+                            RedrawLayered(force: true);
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -830,8 +881,17 @@ namespace FlappyReDovahLauncher
                     DrawStatus(g, w, h);
                     if (ShowCancelButton)
                         DrawEdgeButton(g, _rcCancel, Loc.T("cancel"), 9.5f, muted: false);
-                    else if (ShowMoButton)
-                        DrawEdgeButton(g, _rcMo, Loc.T("modding"), 9.5f, muted: false);
+                    else
+                    {
+                        if (ShowMoButton)
+                            DrawEdgeButton(g, _rcMo, Loc.T("modding"), 9.5f, muted: false);
+                        if (ShowUpdateButton)
+                        {
+                            string upVer = OnlineVersion != null ? ("v" + FormatShortVersion(OnlineVersion)) : "";
+                            string upLabel = Loc.IsRu ? ("✨ Обновить " + upVer) : ("✨ Update " + upVer);
+                            DrawEdgeButton(g, _rcUpdate, upLabel, 9.5f, muted: false);
+                        }
+                    }
                     DrawPlayButton(g);
                     DrawTrayButton(g);
                     DrawGearButton(g);
@@ -1396,6 +1456,15 @@ namespace FlappyReDovahLauncher
                 OnClickCancel();
                 return;
             }
+            if (ShowUpdateButton && _rcUpdate.Contains(p))
+            {
+                PackageInstaller.SetPinnedVersion(null);
+                RefreshPlayState();
+                RefreshVersionText();
+                RedrawLayered(force: true);
+                StartPackageInstallAsync();
+                return;
+            }
             if (ShowMoButton && _rcMo.Contains(p))
             {
                 OnClickModding();
@@ -1544,6 +1613,21 @@ namespace FlappyReDovahLauncher
                 MessageBox.Show(Loc.T("need_install"), Loc.T("bugreport"));
                 return;
             }
+
+            string reportCategory;
+            string reportTitle;
+            string reportDetails;
+
+            using (var form = new BugReportForm())
+            {
+                if (form.ShowDialog(this) != DialogResult.OK)
+                    return;
+
+                reportCategory = form.SelectedCategory;
+                reportTitle = form.ReportTitle;
+                reportDetails = form.ReportDetails;
+            }
+
             _busy = true;
             RefreshPlayState();
             _showProgress = true;
@@ -1578,7 +1662,37 @@ namespace FlappyReDovahLauncher
                     LauncherLog.Warn("PingvinShare upload failed: " + ex.Message);
                 }
 
-                args.Result = new Tuple<string, string>(archive, shareUrl);
+                string discordThreadUrl = null;
+                string discordThreadName = null;
+
+                if (!string.IsNullOrEmpty(shareUrl))
+                {
+                    worker.ReportProgress(0, UiProgress.Make(96, -1, Loc.IsRu ? "Создание тикета в Discord…" : "Creating Discord ticket…"));
+                    try
+                    {
+                        var discRes = DiscordBugReporter.SubmitAsync(
+                            reportCategory,
+                            reportTitle,
+                            reportDetails,
+                            shareUrl,
+                            FormatShortVersion(LauncherSelfUpdate.GetLocalVersion()),
+                            PackageInstaller.GetLocalVersion().ToString(),
+                            token).GetAwaiter().GetResult();
+
+                        if (discRes != null && discRes.Success)
+                        {
+                            discordThreadUrl = discRes.ThreadUrl;
+                            discordThreadName = discRes.ThreadName;
+                            LauncherLog.Info("Discord bug ticket created: " + discordThreadUrl);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("Discord bot submit failed: " + ex.Message);
+                    }
+                }
+
+                args.Result = new Tuple<string, string, string, string>(archive, shareUrl, discordThreadUrl, discordThreadName);
             };
             bw.ProgressChanged += (o, args) =>
             {
@@ -1595,15 +1709,17 @@ namespace FlappyReDovahLauncher
                     IsReady = PackageInstaller.IsInstalled();
                     return;
                 }
-                var res = args.Result as Tuple<string, string>;
+                var res = args.Result as Tuple<string, string, string, string>;
                 string archive = res != null ? res.Item1 : null;
                 string shareUrl = res != null ? res.Item2 : null;
+                string threadUrl = res != null ? res.Item3 : null;
+                string threadName = res != null ? res.Item4 : null;
                 _statusText = Loc.T("ready");
                 IsReady = PackageInstaller.IsInstalled();
 
                 if (!string.IsNullOrEmpty(shareUrl))
                 {
-                    using (var dlg = new BugReportResultForm(shareUrl, archive))
+                    using (var dlg = new BugReportResultForm(shareUrl, archive, threadUrl, threadName))
                     {
                         dlg.ShowDialog(this);
                     }

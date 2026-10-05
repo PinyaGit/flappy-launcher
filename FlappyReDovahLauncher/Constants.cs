@@ -24,6 +24,9 @@ namespace FlappyReDovahLauncher
         /// <summary>Online CDN root (per-game folders hang under this).</summary>
         public const string CDN_PACKAGES_BASE_URL = "https://cdn.flappy.su/";
 
+        /// <summary>Discord Bot Bug Report API (proxied via CDN or NPM to FlappyBot).</summary>
+        public const string BUG_REPORT_API_URL = "https://cdn.flappy.su/api/bug";
+
         // ---------- back-compat aliases (current game) ----------
 
         public static string GAME_TITLE

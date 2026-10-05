@@ -519,9 +519,6 @@ namespace FlappyReDovahLauncher
         {
             if (busy) return PlayButtonState.Busy;
             if (!installed) return PlayButtonState.Install;
-            if (IsVersionPinned()) return PlayButtonState.Play;
-            if (online != null && local < online) return PlayButtonState.Update;
-            // installed but fingerprint drift still allows Play; Update only on version
             return PlayButtonState.Play;
         }
 
