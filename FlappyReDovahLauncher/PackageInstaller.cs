@@ -927,8 +927,14 @@ namespace FlappyReDovahLauncher
 
             Directory.CreateDirectory(GameRootPath);
             Directory.CreateDirectory(DownloadCacheDir);
-            SaveChannel(channel);
-            try { RestoreUserMods(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods on install/repair: " + ex.Message); }
+            if (CurrentUpdateMode == UserModsAction.CleanCanon)
+            {
+                try { QuarantineUserModsForCleanCanon(index); } catch (Exception ex) { LauncherLog.Warn("QuarantineUserModsForCleanCanon on install/repair: " + ex.Message); }
+            }
+            else
+            {
+                try { RestoreUserMods(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods on install/repair: " + ex.Message); }
+            }
 
             var scoped = FilterByChannel(index.units, channel);
             LauncherLog.Info(jobName + " channel=" + channel + " scoped=" + scoped.Count);
@@ -1653,40 +1659,43 @@ namespace FlappyReDovahLauncher
                 string lastOfficialAnchor = "";
                 var clientUserEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-                foreach (var raw in clientLines)
+                if (CurrentUpdateMode != UserModsAction.CleanCanon)
                 {
-                    string t = (raw ?? "").Trim();
-                    if (t.Length == 0 || t[0] == '#') continue;
-
-                    char prefix = t[0];
-                    string name = (prefix == '+' || prefix == '-') ? t.Substring(1).Trim() : t;
-                    if (string.IsNullOrEmpty(name)) continue;
-
-                    bool isSeparator = name.EndsWith("_separator", StringComparison.OrdinalIgnoreCase);
-
-                    if (officialNames.Contains(name))
+                    foreach (var raw in clientLines)
                     {
-                        lastOfficialAnchor = name;
-                    }
-                    else
-                    {
-                        // Non-official entry: check if it was an obsolete official mod removed by author
-                        bool wasOfficial = lastOfficial != null && lastOfficial.Contains(name);
-                        if (wasOfficial)
-                            continue;
+                        string t = (raw ?? "").Trim();
+                        if (t.Length == 0 || t[0] == '#') continue;
 
-                        // If not a separator, ensure folder physically exists on disk
-                        if (!isSeparator && !Directory.Exists(Path.Combine(modsDir, name)))
-                            continue;
+                        char prefix = t[0];
+                        string name = (prefix == '+' || prefix == '-') ? t.Substring(1).Trim() : t;
+                        if (string.IsNullOrEmpty(name)) continue;
 
-                        List<string> list;
-                        if (!anchoredAfter.TryGetValue(lastOfficialAnchor, out list))
+                        bool isSeparator = name.EndsWith("_separator", StringComparison.OrdinalIgnoreCase);
+
+                        if (officialNames.Contains(name))
                         {
-                            list = new List<string>();
-                            anchoredAfter[lastOfficialAnchor] = list;
+                            lastOfficialAnchor = name;
                         }
-                        list.Add(raw);
-                        clientUserEntries.Add(name);
+                        else
+                        {
+                            // Non-official entry: check if it was an obsolete official mod removed by author
+                            bool wasOfficial = lastOfficial != null && lastOfficial.Contains(name);
+                            if (wasOfficial)
+                                continue;
+
+                            // If not a separator, ensure folder physically exists on disk
+                            if (!isSeparator && !Directory.Exists(Path.Combine(modsDir, name)))
+                                continue;
+
+                            List<string> list;
+                            if (!anchoredAfter.TryGetValue(lastOfficialAnchor, out list))
+                            {
+                                list = new List<string>();
+                                anchoredAfter[lastOfficialAnchor] = list;
+                            }
+                            list.Add(raw);
+                            clientUserEntries.Add(name);
+                        }
                     }
                 }
 
@@ -1747,7 +1756,7 @@ namespace FlappyReDovahLauncher
                 }
 
                 // 4. Any unlisted user mods physically on disk in mods/
-                if (Directory.Exists(modsDir))
+                if (CurrentUpdateMode != UserModsAction.CleanCanon && Directory.Exists(modsDir))
                 {
                     foreach (var dir in Directory.GetDirectories(modsDir))
                     {
@@ -2046,7 +2055,14 @@ namespace FlappyReDovahLauncher
                 cancel,
                 out fromLocal);
 
-            try { RestoreUserMods(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods before delta: " + ex.Message); }
+            if (CurrentUpdateMode == UserModsAction.CleanCanon)
+            {
+                try { QuarantineUserModsForCleanCanon(index); } catch (Exception ex) { LauncherLog.Warn("QuarantineUserModsForCleanCanon before delta: " + ex.Message); }
+            }
+            else
+            {
+                try { RestoreUserMods(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods before delta: " + ex.Message); }
+            }
 
             // 2. Extract delta package to staging directory
             string extractMsg = Loc.IsRu ? ("Обновление: распаковка " + patchName) : ("Update: extracting " + patchName);
@@ -2246,8 +2262,11 @@ namespace FlappyReDovahLauncher
             }
             catch { }
 
-            // 1. Restore any previously quarantined user mods
-            RestoreUserMods();
+            // 1. Restore any previously quarantined user mods (only in Preserve mode)
+            if (CurrentUpdateMode == UserModsAction.Preserve)
+            {
+                RestoreUserMods();
+            }
 
             var lastOfficial = LoadOfficialNames();
             HashSet<string> newOfficial = null;
@@ -2260,7 +2279,10 @@ namespace FlappyReDovahLauncher
             {
                 CleanRemovedOfficialMods(lastOfficial, newOfficial);
                 CleanProfilesModlists(newOfficial, lastOfficial);
-                EnsureUserModsInProfiles(newOfficial);
+                if (CurrentUpdateMode == UserModsAction.Preserve)
+                {
+                    EnsureUserModsInProfiles(newOfficial);
+                }
                 SaveOfficialNames(newOfficial);
             }
         }
@@ -2369,6 +2391,98 @@ namespace FlappyReDovahLauncher
                 File.WriteAllLines(OfficialNamesPath, list.ToArray(), new UTF8Encoding(false));
             }
             catch (Exception ex) { LauncherLog.Warn("official-names write: " + ex.Message); }
+        }
+
+        public static UserModsAction CurrentUpdateMode { get; set; } = UserModsAction.Preserve;
+
+        public static List<string> DetectUserMods(Index index)
+        {
+            var list = new List<string>();
+            try
+            {
+                string modsDir = Path.Combine(GameRootPath, "mods");
+                if (!Directory.Exists(modsDir)) return list;
+
+                var lastOfficial = LoadOfficialNames();
+                var newOfficial = (index != null && index.units != null) ? GetOfficialModNames(index) : null;
+                var official = (newOfficial != null && newOfficial.Count > 0) ? newOfficial : lastOfficial;
+
+                foreach (var dir in Directory.GetDirectories(modsDir))
+                {
+                    string name = Path.GetFileName(dir);
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (name.EndsWith("_separator", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (official != null && official.Contains(name)) continue;
+                    if (lastOfficial != null && lastOfficial.Contains(name)) continue;
+
+                    list.Add(name);
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("DetectUserMods: " + ex.Message);
+            }
+            return list;
+        }
+
+        public static void QuarantineUserModsForCleanCanon(Index index)
+        {
+            try
+            {
+                var userMods = DetectUserMods(index);
+                if (userMods.Count == 0) return;
+
+                string modsDir = Path.Combine(GameRootPath, "mods");
+                string profilesDir = Path.Combine(GameRootPath, "profiles");
+
+                // 1. Backup modlist.txt in all profiles
+                if (Directory.Exists(profilesDir))
+                {
+                    foreach (var prof in Directory.GetDirectories(profilesDir))
+                    {
+                        string ml = Path.Combine(prof, "modlist.txt");
+                        if (File.Exists(ml))
+                        {
+                            try { File.Copy(ml, ml + ".user_backup", true); } catch { }
+                        }
+                    }
+                }
+
+                // 2. Move custom mods to UserModsDir
+                Directory.CreateDirectory(UserModsDir);
+                int moved = 0;
+                foreach (var modName in userMods)
+                {
+                    string src = Path.Combine(modsDir, modName);
+                    if (Directory.Exists(src))
+                    {
+                        string dest = UniqueDest(UserModsDir, modName);
+                        try
+                        {
+                            MoveDirectory(src, dest);
+                            moved++;
+                            LauncherLog.Info("CleanCanon moved user mod: " + modName + " -> " + dest);
+                        }
+                        catch (Exception ex)
+                        {
+                            LauncherLog.Warn("CleanCanon move " + modName + ": " + ex.Message);
+                        }
+                    }
+                }
+
+                if (moved > 0)
+                {
+                    TryWriteReadme(UserModsDir,
+                        "Пользовательские моды, перемещенные при обновлении (выбран «Чистый канон автора»).\r\n\r\n" +
+                        "Лаунчер сохранил резервную копию порядка модов в profiles\\*\\modlist.txt.user_backup.\r\n" +
+                        "Если вам понадобятся эти моды, скопируйте их обратно в папку mods\\ игры.\r\n");
+                    LauncherLog.Info("QuarantineUserModsForCleanCanon moved " + moved + " mods to " + UserModsDir);
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("QuarantineUserModsForCleanCanon: " + ex.Message);
+            }
         }
 
         public static string UserModsDir

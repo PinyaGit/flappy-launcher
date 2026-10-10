@@ -2110,6 +2110,34 @@ namespace FlappyReDovahLauncher
             }
             if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
                 return;
+
+            if (PackageInstaller.IsInstalled())
+            {
+                try
+                {
+                    var index = _cachedIndex ?? PackageInstaller.FetchIndex();
+                    var userMods = PackageInstaller.DetectUserMods(index);
+                    if (userMods != null && userMods.Count > 0)
+                    {
+                        var choice = UserModsActionForm.ShowPrompt(this, userMods.Count);
+                        if (!choice.HasValue) return;
+                        PackageInstaller.CurrentUpdateMode = choice.Value;
+                    }
+                    else
+                    {
+                        PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
+                    }
+                }
+                catch
+                {
+                    PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
+                }
+            }
+            else
+            {
+                PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
+            }
+
             InstallChannel channel;
             try { channel = ResolveChannelForJob(allowPrompt: true); }
             catch (OperationCanceledException) { return; }
@@ -2137,6 +2165,34 @@ namespace FlappyReDovahLauncher
             }
             if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
                 return;
+
+            if (PackageInstaller.IsInstalled())
+            {
+                try
+                {
+                    var index = _cachedIndex ?? PackageInstaller.FetchIndex();
+                    var userMods = PackageInstaller.DetectUserMods(index);
+                    if (userMods != null && userMods.Count > 0)
+                    {
+                        var choice = UserModsActionForm.ShowPrompt(this, userMods.Count);
+                        if (!choice.HasValue) return;
+                        PackageInstaller.CurrentUpdateMode = choice.Value;
+                    }
+                    else
+                    {
+                        PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
+                    }
+                }
+                catch
+                {
+                    PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
+                }
+            }
+            else
+            {
+                PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
+            }
+
             var channel = PackageInstaller.GetSavedChannel();
 
             _busy = true;

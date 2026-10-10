@@ -205,6 +205,10 @@ namespace FlappyReDovahLauncher
             { "mo_missing", "ModOrganizer.exe not found.\nInstall or Repair the pack first." },
             { "clean_cache_ask", "Installation completed successfully!\n\nPackage cache archives occupy: {0}\n\nDo you want to delete the installation archives to free up disk space?\n\n⚠️ WARNING:\n• Deleting will free up {0} on your drive.\n• However, future Repair or reinstall operations will need to re-download missing packages from the network.\n• If you are seeding this via torrent, deleting packages will stop seeding." },
             { "clean_cache_done", "Freed {0} of disk space." },
+            { "usermods_title", "Custom Mods Detected" },
+            { "usermods_hint", "Detected {0} custom user mod(s).\nHow would you like to update?" },
+            { "usermods_preserve", "Keep My Mods\n\n(smart merge,\nkeep mods in game)" },
+            { "usermods_canon", "Clean Canon\n\n(recommended,\nmove to UserMods)" },
         };
 
         private static readonly Dictionary<string, string> RuMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -334,6 +338,10 @@ namespace FlappyReDovahLauncher
             { "mo_missing", "Не найден ModOrganizer.exe.\nСначала Установить или Починка." },
             { "clean_cache_ask", "Установка успешно завершена!\n\nАрхивы установки (кеш) занимают на диске: {0}\n\nХотите удалить установочные архивы для освобождения места?\n\n⚠️ ВНИМАНИЕ:\n• При удалении освободится {0} на диске.\n• Однако при последующей починке игры (Repair) или переустановке недостающие архивы придется загружать по новой из сети.\n• Если вы раздаете торрент, удаление архивов остановит раздачу." },
             { "clean_cache_done", "Освобождено {0} места на диске." },
+            { "usermods_title", "Обнаружены сторонние моды" },
+            { "usermods_hint", "В сборке обнаружено сторонних модов: {0} шт.\nКак обновить порядок модов?" },
+            { "usermods_preserve", "Сохранить мои моды\n\n(умное слияние,\nоставить моды в игре)" },
+            { "usermods_canon", "Чистый канон автора\n\n(рекомендуется,\nубрать в UserMods)" },
         };
     }
 }
