@@ -39,11 +39,11 @@ namespace FlappyReDovahLauncher
         private Button _btnEn;
 
         private Label _speedLabel;
-        private Button _btnSpeed0;
-        private Button _btnSpeed5;
-        private Button _btnSpeed10;
-        private Button _btnSpeed25;
-        private Button _btnSpeed50;
+        private Label _speedValueLabel;
+        private FlappySlider _speedSlider;
+        private Label _speedTicksMin;
+        private Label _speedTicksMid;
+        private Label _speedTicksMax;
 
         private Label _quickAccessLabel;
         private Button _btnOpenGameDir;
@@ -128,32 +128,69 @@ namespace FlappyReDovahLauncher
                 AutoSize = false,
                 ForeColor = FlappyTheme.Gold,
                 Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-                Location = new Point(4, 72),
-                Size = new Size(430, 20)
+                Location = new Point(4, 70),
+                Size = new Size(200, 20)
             };
-            _btnSpeed0 = FlappyTheme.MakeGoldButton("∞", new Point(4, 94), new Size(98, 32), primary: false);
-            _btnSpeed5 = FlappyTheme.MakeGoldButton("5 MB", new Point(108, 94), new Size(76, 32), primary: false);
-            _btnSpeed10 = FlappyTheme.MakeGoldButton("10 MB", new Point(190, 94), new Size(78, 32), primary: false);
-            _btnSpeed25 = FlappyTheme.MakeGoldButton("25 MB", new Point(274, 94), new Size(78, 32), primary: false);
-            _btnSpeed50 = FlappyTheme.MakeGoldButton("50 MB", new Point(358, 94), new Size(78, 32), primary: false);
+            _speedValueLabel = new Label
+            {
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleRight,
+                ForeColor = FlappyTheme.GoldHi,
+                Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
+                Location = new Point(206, 70),
+                Size = new Size(228, 20)
+            };
+            _speedSlider = new FlappySlider
+            {
+                Location = new Point(4, 94),
+                Size = new Size(432, 26),
+                Minimum = 0,
+                Maximum = 100,
+                Value = LauncherSettings.DownloadSpeedLimitMBps
+            };
+            _speedSlider.ValueChanged += (s, e) => UpdateSpeedValueDisplay(_speedSlider.Value);
+            _speedSlider.ValueCommitted += (s, e) => SetSpeedLimit(_speedSlider.Value);
 
-            _btnSpeed0.Click += (s, e) => SetSpeedLimit(0);
-            _btnSpeed5.Click += (s, e) => SetSpeedLimit(5);
-            _btnSpeed10.Click += (s, e) => SetSpeedLimit(10);
-            _btnSpeed25.Click += (s, e) => SetSpeedLimit(25);
-            _btnSpeed50.Click += (s, e) => SetSpeedLimit(50);
+            _speedTicksMin = new Label
+            {
+                AutoSize = false,
+                Text = "0 (∞)",
+                ForeColor = FlappyTheme.Mute,
+                Font = new Font("Segoe UI", 7.5f, FontStyle.Regular),
+                Location = new Point(4, 120),
+                Size = new Size(80, 16)
+            };
+            _speedTicksMid = new Label
+            {
+                AutoSize = false,
+                Text = "50",
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = FlappyTheme.Mute,
+                Font = new Font("Segoe UI", 7.5f, FontStyle.Regular),
+                Location = new Point(180, 120),
+                Size = new Size(80, 16)
+            };
+            _speedTicksMax = new Label
+            {
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleRight,
+                ForeColor = FlappyTheme.Mute,
+                Font = new Font("Segoe UI", 7.5f, FontStyle.Regular),
+                Location = new Point(326, 120),
+                Size = new Size(110, 16)
+            };
 
             _quickAccessLabel = new Label
             {
                 AutoSize = false,
                 ForeColor = FlappyTheme.Gold,
                 Font = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold),
-                Location = new Point(4, 142),
+                Location = new Point(4, 144),
                 Size = new Size(430, 20)
             };
-            _btnOpenGameDir = FlappyTheme.MakeGoldButton("", new Point(4, 166), new Size(210, 36), primary: false);
-            _btnOpenUserMods = FlappyTheme.MakeGoldButton("", new Point(226, 166), new Size(210, 36), primary: false);
-            _btnOpenLog = FlappyTheme.MakeGoldButton("", new Point(4, 210), new Size(432, 34), primary: false);
+            _btnOpenGameDir = FlappyTheme.MakeGoldButton("", new Point(4, 168), new Size(210, 36), primary: false);
+            _btnOpenUserMods = FlappyTheme.MakeGoldButton("", new Point(226, 168), new Size(210, 36), primary: false);
+            _btnOpenLog = FlappyTheme.MakeGoldButton("", new Point(4, 212), new Size(432, 34), primary: false);
 
             _btnOpenGameDir.Click += (s, e) =>
             {
@@ -194,11 +231,11 @@ namespace FlappyReDovahLauncher
             _pnlGeneral.Controls.Add(_btnRu);
             _pnlGeneral.Controls.Add(_btnEn);
             _pnlGeneral.Controls.Add(_speedLabel);
-            _pnlGeneral.Controls.Add(_btnSpeed0);
-            _pnlGeneral.Controls.Add(_btnSpeed5);
-            _pnlGeneral.Controls.Add(_btnSpeed10);
-            _pnlGeneral.Controls.Add(_btnSpeed25);
-            _pnlGeneral.Controls.Add(_btnSpeed50);
+            _pnlGeneral.Controls.Add(_speedValueLabel);
+            _pnlGeneral.Controls.Add(_speedSlider);
+            _pnlGeneral.Controls.Add(_speedTicksMin);
+            _pnlGeneral.Controls.Add(_speedTicksMid);
+            _pnlGeneral.Controls.Add(_speedTicksMax);
             _pnlGeneral.Controls.Add(_quickAccessLabel);
             _pnlGeneral.Controls.Add(_btnOpenGameDir);
             _pnlGeneral.Controls.Add(_btnOpenUserMods);
@@ -282,7 +319,6 @@ namespace FlappyReDovahLauncher
             CancelButton = _btnClose;
 
             ApplyTexts();
-            UpdateSpeedButtonsHighlight();
         }
 
         private void SwitchTab(int tabIndex)
@@ -305,18 +341,23 @@ namespace FlappyReDovahLauncher
         {
             LauncherSettings.DownloadSpeedLimitMBps = mbps;
             LauncherSettings.Save();
-            UpdateSpeedButtonsHighlight();
+            UpdateSpeedValueDisplay(mbps);
             LauncherLog.Info("Speed limit set to: " + (mbps <= 0 ? "Unlimited" : mbps + " MB/s"));
         }
 
-        private void UpdateSpeedButtonsHighlight()
+        private void UpdateSpeedValueDisplay(int mbps)
         {
-            int cur = LauncherSettings.DownloadSpeedLimitMBps;
-            FlappyTheme.SetHighlight(_btnSpeed0, cur <= 0);
-            FlappyTheme.SetHighlight(_btnSpeed5, cur == 5);
-            FlappyTheme.SetHighlight(_btnSpeed10, cur == 10);
-            FlappyTheme.SetHighlight(_btnSpeed25, cur == 25);
-            FlappyTheme.SetHighlight(_btnSpeed50, cur == 50);
+            if (mbps <= 0)
+            {
+                _speedValueLabel.Text = Loc.T("speed_unlimited");
+            }
+            else
+            {
+                int bits = mbps * 8;
+                _speedValueLabel.Text = Loc.IsRu
+                    ? $"{mbps} МБ/с (~{bits} Мбит/с)"
+                    : $"{mbps} MB/s (~{bits} Mbps)";
+            }
         }
 
         private void Finish(SettingsAction action)
@@ -349,11 +390,8 @@ namespace FlappyReDovahLauncher
             // Tab 1
             _langLabel.Text = Loc.T("language");
             _speedLabel.Text = Loc.T("speed_limit");
-            _btnSpeed0.Text = Loc.T("speed_unlimited");
-            _btnSpeed5.Text = Loc.T("speed_5mb");
-            _btnSpeed10.Text = Loc.T("speed_10mb");
-            _btnSpeed25.Text = Loc.T("speed_25mb");
-            _btnSpeed50.Text = Loc.T("speed_50mb");
+            _speedTicksMax.Text = Loc.IsRu ? "100 МБ/с" : "100 MB/s";
+            UpdateSpeedValueDisplay(_speedSlider.Value);
 
             _quickAccessLabel.Text = Loc.T("section_quick_access");
             _btnOpenGameDir.Text = Loc.T("open_game_dir");
