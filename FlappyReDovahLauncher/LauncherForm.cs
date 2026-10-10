@@ -59,6 +59,7 @@ namespace FlappyReDovahLauncher
         private Rectangle _rcClose;
         private Rectangle _rcGear;
         private Rectangle _rcTray;
+        private Rectangle _rcBanner;
         private Rectangle[] _rcGames; // left library rail
         private NotifyIcon _tray;
         private ContextMenuStrip _trayMenu;
@@ -160,6 +161,22 @@ namespace FlappyReDovahLauncher
             InitTray();
             GameCatalog.CurrentChanged += OnGameCatalogChanged;
             Loc.LanguageChanged += OnLanguageChanged;
+            RemoteConfig.Updated += OnRemoteConfigUpdated;
+            _ = System.Threading.Tasks.Task.Run(async () => await RemoteConfig.FetchAsync(2500));
+        }
+
+        private void OnRemoteConfigUpdated()
+        {
+            if (IsDisposed) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(OnRemoteConfigUpdated));
+                return;
+            }
+            LayoutHitRects();
+            RefreshPlayState();
+            RefreshStatusText();
+            RedrawLayered(force: true);
         }
 
         private void OnLanguageChanged()
@@ -181,6 +198,11 @@ namespace FlappyReDovahLauncher
         private void RefreshStatusText()
         {
             if (_busy) return;
+            if (RemoteConfig.Current.Maintenance != null && RemoteConfig.Current.Maintenance.Enabled)
+            {
+                _statusText = Loc.IsRu ? "⚠️ Технические работы" : "⚠️ Maintenance Mode";
+                return;
+            }
             if (!GameCatalog.Current.Available)
                 _statusText = Loc.GameBlurb(GameCatalog.Current);
             else if (!_isInstalled || _playState == PlayButtonState.Install)
@@ -581,6 +603,17 @@ namespace FlappyReDovahLauncher
             const int gap = 8;
             int leftCol = iconPad + iconSize + gap + 8;
             _rcPlay = new Rectangle(w - gap - playW, h - 14 - playH, playW, playH);
+
+            var banner = RemoteConfig.Current.Banner;
+            if (banner != null && banner.Enabled && !string.IsNullOrWhiteSpace(banner.Text))
+            {
+                int bannerW = Math.Max(120, _rcTray.Left - leftCol - 12);
+                _rcBanner = new Rectangle(leftCol, 14, bannerW, 28);
+            }
+            else
+            {
+                _rcBanner = Rectangle.Empty;
+            }
             _rcCancel = new Rectangle(_rcPlay.Right - updateW, _rcPlay.Top - gap - smallH, updateW, smallH);
 
             if (ShowUpdateButton)
@@ -896,6 +929,7 @@ namespace FlappyReDovahLauncher
                     DrawTrayButton(g);
                     DrawGearButton(g);
                     DrawCloseButton(g);
+                    DrawBanner(g);
                 }
 
                 ApplyLayeredBitmap(_frame);
@@ -1341,6 +1375,55 @@ namespace FlappyReDovahLauncher
             }
         }
 
+        private void DrawBanner(Graphics g)
+        {
+            if (_rcBanner.IsEmpty) return;
+            var banner = RemoteConfig.Current.Banner;
+            if (banner == null || !banner.Enabled || string.IsNullOrWhiteSpace(banner.Text)) return;
+
+            string type = (banner.Type ?? "info").ToLowerInvariant();
+            Color bg, border, textColor;
+            if (type == "alert" || type == "error")
+            {
+                bg = Color.FromArgb(210, 80, 20, 20);
+                border = Color.FromArgb(240, 230, 70, 70);
+                textColor = Color.FromArgb(255, 255, 210, 210);
+            }
+            else if (type == "warning")
+            {
+                bg = Color.FromArgb(210, 70, 50, 10);
+                border = Color.FromArgb(240, 220, 180, 80);
+                textColor = Color.FromArgb(255, 255, 240, 180);
+            }
+            else
+            {
+                bg = Color.FromArgb(200, 20, 36, 56);
+                border = Color.FromArgb(220, 100, 160, 250);
+                textColor = Color.FromArgb(255, 220, 235, 255);
+            }
+
+            using (var path = RoundedRect(_rcBanner, 6))
+            using (var brush = new SolidBrush(bg))
+            using (var pen = new Pen(border, 1f))
+            using (var font = new Font("Segoe UI", 8.25f, FontStyle.Bold))
+            using (var textBrush = new SolidBrush(textColor))
+            {
+                g.FillPath(brush, path);
+                g.DrawPath(pen, path);
+
+                string prefix = type == "alert" ? "🚨 " : (type == "warning" ? "⚠️ " : "📢 ");
+                string text = prefix + banner.Text;
+                var sf = new StringFormat
+                {
+                    Alignment = StringAlignment.Center,
+                    LineAlignment = StringAlignment.Center,
+                    Trimming = StringTrimming.EllipsisCharacter,
+                    FormatFlags = StringFormatFlags.NoWrap
+                };
+                g.DrawString(text, font, textBrush, _rcBanner, sf);
+            }
+        }
+
         private static GraphicsPath RoundedRect(Rectangle bounds, int radius)
         {
             int d = radius * 2;
@@ -1444,6 +1527,15 @@ namespace FlappyReDovahLauncher
                         GameCatalog.Select(GameCatalog.Games[i]);
                         return;
                     }
+                }
+            }
+            if (!_rcBanner.IsEmpty && _rcBanner.Contains(p))
+            {
+                var banner = RemoteConfig.Current.Banner;
+                if (banner != null && !string.IsNullOrWhiteSpace(banner.Link))
+                {
+                    OpenUrl(banner.Link);
+                    return;
                 }
             }
             if (_rcPlay.Contains(p))
@@ -1650,6 +1742,7 @@ namespace FlappyReDovahLauncher
                     token);
 
                 string shareUrl = null;
+                string shareError = null;
                 try
                 {
                     shareUrl = PingvinShareUploader.UploadAsync(
@@ -1659,11 +1752,13 @@ namespace FlappyReDovahLauncher
                 }
                 catch (Exception ex)
                 {
+                    shareError = ex.Message;
                     LauncherLog.Warn("PingvinShare upload failed: " + ex.Message);
                 }
 
                 string discordThreadUrl = null;
                 string discordThreadName = null;
+                string discordError = null;
 
                 if (!string.IsNullOrEmpty(shareUrl))
                 {
@@ -1688,11 +1783,20 @@ namespace FlappyReDovahLauncher
                     }
                     catch (Exception ex)
                     {
+                        discordError = ex.Message;
                         LauncherLog.Warn("Discord bot submit failed: " + ex.Message);
                     }
                 }
 
-                args.Result = new Tuple<string, string, string, string>(archive, shareUrl, discordThreadUrl, discordThreadName);
+                args.Result = new BugReportOutcome
+                {
+                    ArchivePath = archive,
+                    ShareUrl = shareUrl,
+                    DiscordThreadUrl = discordThreadUrl,
+                    DiscordThreadName = discordThreadName,
+                    ShareError = shareError,
+                    DiscordError = discordError
+                };
             };
             bw.ProgressChanged += (o, args) =>
             {
@@ -1709,11 +1813,12 @@ namespace FlappyReDovahLauncher
                     IsReady = PackageInstaller.IsInstalled();
                     return;
                 }
-                var res = args.Result as Tuple<string, string, string, string>;
-                string archive = res != null ? res.Item1 : null;
-                string shareUrl = res != null ? res.Item2 : null;
-                string threadUrl = res != null ? res.Item3 : null;
-                string threadName = res != null ? res.Item4 : null;
+                var outcome = args.Result as BugReportOutcome;
+                string archive = outcome != null ? outcome.ArchivePath : null;
+                string shareUrl = outcome != null ? outcome.ShareUrl : null;
+                string threadUrl = outcome != null ? outcome.DiscordThreadUrl : null;
+                string threadName = outcome != null ? outcome.DiscordThreadName : null;
+                string shareError = outcome != null ? outcome.ShareError : null;
                 _statusText = Loc.T("ready");
                 IsReady = PackageInstaller.IsInstalled();
 
@@ -1726,8 +1831,15 @@ namespace FlappyReDovahLauncher
                 }
                 else if (!string.IsNullOrEmpty(archive))
                 {
+                    string msg = Loc.F("bugreport_done", archive) + Environment.NewLine + Environment.NewLine + Loc.T("bugreport_open_folder");
+                    if (!string.IsNullOrEmpty(shareError))
+                    {
+                        msg += Environment.NewLine + Environment.NewLine +
+                            (Loc.IsRu ? "Предупреждение: не удалось выгрузить в Flappy Share:\n" : "Warning: Failed to upload to Flappy Share:\n") +
+                            shareError;
+                    }
                     MessageBox.Show(
-                        Loc.F("bugreport_done", archive) + Environment.NewLine + Environment.NewLine + Loc.T("bugreport_open_folder"),
+                        msg,
                         Loc.T("bugreport_done_title"),
                         MessageBoxButtons.OK,
                         MessageBoxIcon.Information);
@@ -1735,6 +1847,16 @@ namespace FlappyReDovahLauncher
                 }
             };
             bw.RunWorkerAsync();
+        }
+
+        private class BugReportOutcome
+        {
+            public string ArchivePath;
+            public string ShareUrl;
+            public string DiscordThreadUrl;
+            public string DiscordThreadName;
+            public string ShareError;
+            public string DiscordError;
         }
 
         private void OnClickPlay()
@@ -1969,6 +2091,14 @@ namespace FlappyReDovahLauncher
 
         private void StartPackageInstallAsync()
         {
+            if (RemoteConfig.Current.Maintenance != null && RemoteConfig.Current.Maintenance.Enabled)
+            {
+                string msg = !string.IsNullOrWhiteSpace(RemoteConfig.Current.Maintenance.Message)
+                    ? RemoteConfig.Current.Maintenance.Message
+                    : (Loc.IsRu ? "Ведутся технические работы по обновлению сборки. Попробуйте позже." : "Server maintenance in progress. Please try again later.");
+                MessageBox.Show(this, msg, Loc.IsRu ? "Технические работы" : "Maintenance", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             if (!PackageInstaller.IsInstalled() && !PackageInstaller.CanFreshInstall())
             {
                 MessageBox.Show(
@@ -1997,6 +2127,14 @@ namespace FlappyReDovahLauncher
         private void StartRepairAsync()
         {
             if (_busy) return;
+            if (RemoteConfig.Current.Maintenance != null && RemoteConfig.Current.Maintenance.Enabled)
+            {
+                string msg = !string.IsNullOrWhiteSpace(RemoteConfig.Current.Maintenance.Message)
+                    ? RemoteConfig.Current.Maintenance.Message
+                    : (Loc.IsRu ? "Ведутся технические работы по обновлению сборки. Попробуйте позже." : "Server maintenance in progress. Please try again later.");
+                MessageBox.Show(this, msg, Loc.IsRu ? "Технические работы" : "Maintenance", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
                 return;
             var channel = PackageInstaller.GetSavedChannel();

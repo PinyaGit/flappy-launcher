@@ -94,8 +94,14 @@ namespace FlappyReDovahLauncher
             get { return Path.Combine(DESTINATION_PATH, "ModOrganizer.exe"); }
         }
 
-        public static readonly string BOOSTY_URL = "https://boosty.to/flappyae";
-        public static readonly string DISCORD_URL = "https://discord.com/invite/XqPmTqSyqF";
+        public static string BOOSTY_URL = "https://boosty.to/flappyae";
+        public static string DISCORD_URL = "https://discord.com/invite/XqPmTqSyqF";
+        public static string TELEGRAM_URL = "";
+
+        public static string REMOTE_CONFIG_URL
+        {
+            get { return CombineCdn("launcher-config.json"); }
+        }
 
         public static bool SHOW_VERSION_TEXT = true;
         public static bool AUTOMATICALLY_BEGIN_UPDATING = false;
