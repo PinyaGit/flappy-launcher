@@ -451,6 +451,9 @@ namespace FlappyReDovahLauncher
                         while ((read = net.Read(buffer, 0, buffer.Length)) > 0)
                         {
                             cancel.ThrowIfCancellationRequested();
+                            DownloadControl.WaitIfPaused(cancel);
+                            SpeedLimiter.Throttle(read, cancel);
+
                             file.Write(buffer, 0, read);
                             received += read;
                             long now = Environment.TickCount;
@@ -514,6 +517,9 @@ namespace FlappyReDovahLauncher
                         while ((read = net.Read(buffer, 0, buffer.Length)) > 0)
                         {
                             cancel.ThrowIfCancellationRequested();
+                            DownloadControl.WaitIfPaused(cancel);
+                            SpeedLimiter.Throttle(read, cancel);
+
                             file.Write(buffer, 0, read);
                         }
                     }

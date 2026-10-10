@@ -9,6 +9,7 @@ namespace FlappyReDovahLauncher
     {
         public static string Language { get; set; }
         public static int DownloadParallelism { get { return 2; } }
+        public static int DownloadSpeedLimitMBps { get; set; } = 0;
 
         private static string FilePath
         {
@@ -18,6 +19,7 @@ namespace FlappyReDovahLauncher
         public static void Load()
         {
             Language = "";
+            DownloadSpeedLimitMBps = 0;
             try
             {
                 if (!File.Exists(FilePath)) return;
@@ -30,6 +32,11 @@ namespace FlappyReDovahLauncher
                     string val = line.Substring(eq + 1).Trim();
                     if (key == "lang" || key == "language")
                         Language = Loc.Normalize(val);
+                    else if (key == "speed_limit" || key == "speedlimit")
+                    {
+                        int lim;
+                        if (int.TryParse(val, out lim)) DownloadSpeedLimitMBps = Math.Max(0, lim);
+                    }
                 }
             }
             catch (Exception ex)
@@ -42,7 +49,8 @@ namespace FlappyReDovahLauncher
         {
             try
             {
-                string body = "lang=" + (Language ?? "") + Environment.NewLine;
+                string body = "lang=" + (Language ?? "") + Environment.NewLine +
+                              "speed_limit=" + DownloadSpeedLimitMBps + Environment.NewLine;
                 File.WriteAllText(FilePath, body, new UTF8Encoding(false));
             }
             catch (Exception ex)

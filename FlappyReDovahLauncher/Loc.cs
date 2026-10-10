@@ -209,6 +209,16 @@ namespace FlappyReDovahLauncher
             { "usermods_hint", "Detected {0} custom user mod(s).\nHow would you like to update?" },
             { "usermods_preserve", "Keep My Mods\n\n(smart merge,\nkeep mods in game)" },
             { "usermods_canon", "Clean Canon\n\n(recommended,\nmove to UserMods)" },
+            { "tab_general", "General & Network" },
+            { "tab_tools", "Modpack Tools" },
+            { "speed_limit", "Download Speed Limit" },
+            { "speed_unlimited", "No Limit" },
+            { "pause", "Pause" },
+            { "resume", "Resume" },
+            { "paused_status", "Paused · Download suspended" },
+            { "section_quick_access", "Quick Access" },
+            { "section_maintenance", "Game Maintenance" },
+            { "section_support", "Support & Uninstall" },
         };
 
         private static readonly Dictionary<string, string> RuMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -342,6 +352,16 @@ namespace FlappyReDovahLauncher
             { "usermods_hint", "В сборке обнаружено сторонних модов: {0} шт.\nКак обновить порядок модов?" },
             { "usermods_preserve", "Сохранить мои моды\n\n(умное слияние,\nоставить моды в игре)" },
             { "usermods_canon", "Чистый канон автора\n\n(рекомендуется,\nубрать в UserMods)" },
+            { "tab_general", "Основные и Сеть" },
+            { "tab_tools", "Инструменты сборки" },
+            { "speed_limit", "Ограничение скорости скачивания" },
+            { "speed_unlimited", "Без лимита" },
+            { "pause", "Пауза" },
+            { "resume", "Продолжить" },
+            { "paused_status", "Пауза · Загрузка приостановлена" },
+            { "section_quick_access", "Быстрый доступ" },
+            { "section_maintenance", "Обслуживание игры" },
+            { "section_support", "Поддержка и удаление" },
         };
     }
 }

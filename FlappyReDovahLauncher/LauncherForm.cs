@@ -40,7 +40,16 @@ namespace FlappyReDovahLauncher
 
         private bool _isReady;
         private bool _isInstalled;
-        private bool _busy;
+        private bool _busyState;
+        private bool _busy
+        {
+            get { return _busyState; }
+            set
+            {
+                _busyState = value;
+                DownloadControl.Reset();
+            }
+        }
         private PlayButtonState _playState = PlayButtonState.Install;
         private string _playText = "Install";
         private string _versionText = "-";
@@ -54,6 +63,7 @@ namespace FlappyReDovahLauncher
         private Rectangle _rcMo;
         private Rectangle _rcUpdate;
         private Rectangle _rcCancel;
+        private Rectangle _rcPause;
         private Rectangle _rcDiscord;
         private Rectangle _rcBoosty;
         private Rectangle _rcClose;
@@ -162,7 +172,21 @@ namespace FlappyReDovahLauncher
             GameCatalog.CurrentChanged += OnGameCatalogChanged;
             Loc.LanguageChanged += OnLanguageChanged;
             RemoteConfig.Updated += OnRemoteConfigUpdated;
+            DownloadControl.PauseStateChanged += OnDownloadPauseStateChanged;
             _ = System.Threading.Tasks.Task.Run(async () => await RemoteConfig.FetchAsync(2500));
+        }
+
+        private void OnDownloadPauseStateChanged(bool paused)
+        {
+            if (IsDisposed) return;
+            try
+            {
+                if (InvokeRequired)
+                    BeginInvoke(new Action(() => RedrawLayered(force: true)));
+                else
+                    RedrawLayered(force: true);
+            }
+            catch { }
         }
 
         private void OnRemoteConfigUpdated()
@@ -614,7 +638,9 @@ namespace FlappyReDovahLauncher
             {
                 _rcBanner = Rectangle.Empty;
             }
-            _rcCancel = new Rectangle(_rcPlay.Right - updateW, _rcPlay.Top - gap - smallH, updateW, smallH);
+            const int btnW = 100;
+            _rcCancel = new Rectangle(_rcPlay.Right - btnW, _rcPlay.Top - gap - smallH, btnW, smallH);
+            _rcPause = new Rectangle(_rcCancel.Left - gap - btnW, _rcPlay.Top - gap - smallH, btnW, smallH);
 
             if (ShowUpdateButton)
             {
@@ -913,7 +939,11 @@ namespace FlappyReDovahLauncher
 
                     DrawStatus(g, w, h);
                     if (ShowCancelButton)
+                    {
+                        string pauseLabel = DownloadControl.IsPaused ? Loc.T("resume") : Loc.T("pause");
+                        DrawEdgeButton(g, _rcPause, pauseLabel, 9.5f, muted: false);
                         DrawEdgeButton(g, _rcCancel, Loc.T("cancel"), 9.5f, muted: false);
+                    }
                     else
                     {
                         if (ShowMoButton)
@@ -970,7 +1000,9 @@ namespace FlappyReDovahLauncher
             using (var brushVer = new SolidBrush(EdgeMute))
             {
                 string main;
-                if (_showProgress)
+                if (_busy && DownloadControl.IsPaused)
+                    main = Loc.T("paused_status");
+                else if (_showProgress)
                     main = string.IsNullOrEmpty(_statusText) ? Loc.T("updating") : _statusText;
                 else if (!GameCatalog.Current.Available)
                     main = string.IsNullOrEmpty(_statusText)
@@ -1548,6 +1580,11 @@ namespace FlappyReDovahLauncher
                 OnClickCancel();
                 return;
             }
+            if (ShowCancelButton && _rcPause.Contains(p))
+            {
+                OnClickPause();
+                return;
+            }
             if (ShowUpdateButton && _rcUpdate.Contains(p))
             {
                 PackageInstaller.SetPinnedVersion(null);
@@ -1879,6 +1916,7 @@ namespace FlappyReDovahLauncher
         {
             try
             {
+                DownloadControl.Resume();
                 if (_jobCts != null && !_jobCts.IsCancellationRequested)
                 {
                     _jobCts.Cancel();
@@ -1888,6 +1926,20 @@ namespace FlappyReDovahLauncher
                 }
             }
             catch { }
+        }
+
+        private void OnClickPause()
+        {
+            try
+            {
+                DownloadControl.Toggle();
+                LauncherLog.Info(DownloadControl.IsPaused ? "User paused download" : "User resumed download");
+                RedrawLayered(force: true);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("OnClickPause error: " + ex.Message);
+            }
         }
 
         private void OnClickModding()

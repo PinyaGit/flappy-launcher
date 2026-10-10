@@ -731,6 +731,12 @@ namespace FlappyReDovahLauncher
                 && string.Equals(withoutBackupFilter, expected, StringComparison.OrdinalIgnoreCase))
                 return true;
 
+            // Some mod archives contain BOTH meta.ini and backup files that server builder hashed together
+            string withMetaAndBackup = ComputeUnitFingerprint(unit, true, ignoreTimestampBackups: false);
+            if (!string.IsNullOrEmpty(withMetaAndBackup)
+                && string.Equals(withMetaAndBackup, expected, StringComparison.OrdinalIgnoreCase))
+                return true;
+
             // Root files unit: MO2 modifies ModOrganizer.ini and creates fomod.db on first launch.
             // If this root unit was already successfully applied and core binaries exist, do not trigger false repair.
             if (IsRootUnit(unit))
