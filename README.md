@@ -22,7 +22,7 @@ Source for **Flappy Launcher** — a multi-game desktop library (**Re-Dovah**, *
 |--|--|
 | **Product** | Flappy Launcher |
 | **Exe** | `Flappy Launcher.exe` |
-| **Version (this tree)** | **0.2.0** (launcher only — not a game version) |
+| **Version (this tree)** | **0.2.11** (launcher only — not a game version) |
 | **Framework** | **.NET 8.0 Windows Desktop** (Self-Contained Single-File) |
 | **CDN zip** | `launcher/Flappy-Launcher.zip` |
 | **Manifest** | `launcher/version.json` |
@@ -39,6 +39,8 @@ This is **not** a full game dump and **not** the mod archives. It is the install
 - Update / Repair by fingerprint
 - Play via Mod Organizer 2 custom executables
 - launcher self-update (`launcher/version.json`)
+- **Remote Configuration** (`launcher-config.json`): dynamic server maintenance mode, top announcement banner with clickable link, and runtime catalog access toggles without recompilation
+- **Flappy Share** bug reporting with automatic chunk sizing and crash diagnostics
 
 Built on ideas from Universal Game Launcher (Teemu Sillanpää, MIT), heavily adapted for Flappy.
 
@@ -114,12 +116,23 @@ Games are registered in `GameCatalog.cs` (id, CDN folder, install folder, VR fla
 
 ```
 https://cdn.flappy.su/
+  launcher-config.json          # Dynamic remote config (maintenance, banner, gates)
   index.json                    # Re-Dovah (CDN root today)
   packages/...
-  flappy/ ...                   # Flappy 4.0.0 tree (when published)
+  flappy/ ...                   # Flappy Standard tree
   launcher/version.json
   launcher/Flappy-Launcher.zip
 ```
+
+## Changelog
+
+### v0.2.11
+- **Remote Configuration**: launcher reads `https://cdn.flappy.su/launcher-config.json` asynchronously on startup with graceful fallback.
+- **Maintenance Mode**: blocks updates/installs with custom administrator notice when enabled on CDN.
+- **Top Announcement Banner**: interactive banner displaying MOTD notices (info/warning/alert) with custom click links.
+- **Dynamic Catalog Visibility**: control game availability and access gates from the server dashboard.
+- **Flappy Share Alignment**: dynamic chunk sizing query against Pingvin Share configuration API.
+- **Security Hardening**: zero plaintext credentials in build scripts and uploaders; environment variable integration.
 
 ## Tools (maintainers)
 

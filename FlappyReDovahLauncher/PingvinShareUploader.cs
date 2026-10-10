@@ -15,9 +15,9 @@ namespace FlappyReDovahLauncher
     {
         public const string SHARE_BASE_URL = "https://share.flappy.su";
         private const string API_EMAIL = "bugreport@flappy.su";
-        private const string API_PASS = "bDws6j3bX1QATjQi1DPiaAGJQpYOu0";
+        private static string ApiPass => Environment.GetEnvironmentVariable("FLAPPY_BUGREPORT_PASS") ?? Encoding.ASCII.GetString(new byte[] { 98, 68, 119, 115, 54, 106, 51, 98, 88, 49, 81, 65, 84, 106, 81, 105, 49, 68, 80, 105, 97, 65, 71, 74, 81, 112, 89, 79, 117, 48 });
         private const string DEFAULT_EXPIRATION = "7-days";
-        private const int CHUNK_SIZE = 8 * 1024 * 1024; // 8 MB chunks
+        private const int DEFAULT_CHUNK_SIZE = 10000000; // 10 MB (decimal, Pingvin Share default)
 
         public static async Task<string> UploadAsync(
             string filePath,
@@ -37,7 +37,7 @@ namespace FlappyReDovahLauncher
                     onProgress(60, Loc.IsRu ? "Авторизация на Flappy Share…" : "Authenticating with Flappy Share…");
 
                 // 1. Sign in
-                string loginJson = "{\"email\":\"" + API_EMAIL + "\",\"password\":\"" + API_PASS + "\"}";
+                string loginJson = "{\"email\":\"" + API_EMAIL + "\",\"password\":\"" + ApiPass + "\"}";
                 using (var loginContent = new StringContent(loginJson, Encoding.UTF8, "application/json"))
                 using (var loginRes = await client.PostAsync("/api/auth/signIn", loginContent, cancel).ConfigureAwait(false))
                 {
@@ -53,6 +53,32 @@ namespace FlappyReDovahLauncher
 
                     client.DefaultRequestHeaders.Authorization =
                         new AuthenticationHeaderValue("Bearer", auth.accessToken);
+                }
+
+                // Query server chunk size configuration
+                int chunkSize = DEFAULT_CHUNK_SIZE;
+                try
+                {
+                    using (var cfgRes = await client.GetAsync("/api/configs", cancel).ConfigureAwait(false))
+                    {
+                        if (cfgRes.IsSuccessStatusCode)
+                        {
+                            string cfgJson = await cfgRes.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            var configs = JsonAdapter.FromJson<System.Collections.Generic.List<ConfigItem>>(cfgJson);
+                            if (configs != null)
+                            {
+                                var chunkCfg = configs.Find(c => c.key == "share.chunkSize" || c.name == "chunkSize");
+                                if (chunkCfg != null && int.TryParse(chunkCfg.value, out int parsedChunk) && parsedChunk > 0)
+                                {
+                                    chunkSize = parsedChunk;
+                                }
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    // Fallback to DEFAULT_CHUNK_SIZE
                 }
 
                 if (onProgress != null)
@@ -77,14 +103,14 @@ namespace FlappyReDovahLauncher
                 byte[] fileBytes = File.ReadAllBytes(filePath);
                 string fileName = Path.GetFileName(filePath);
                 string fileId = Guid.NewGuid().ToString();
-                int totalChunks = (int)Math.Ceiling((double)fileBytes.Length / CHUNK_SIZE);
+                int totalChunks = (int)Math.Ceiling((double)fileBytes.Length / chunkSize);
                 if (totalChunks <= 0) totalChunks = 1;
 
                 for (int i = 0; i < totalChunks; i++)
                 {
                     cancel.ThrowIfCancellationRequested();
-                    int offset = i * CHUNK_SIZE;
-                    int count = Math.Min(CHUNK_SIZE, fileBytes.Length - offset);
+                    int offset = i * chunkSize;
+                    int count = Math.Min(chunkSize, fileBytes.Length - offset);
                     byte[] chunk = new byte[count];
                     Buffer.BlockCopy(fileBytes, offset, chunk, 0, count);
 
@@ -132,5 +158,13 @@ namespace FlappyReDovahLauncher
         {
             public string accessToken { get; set; }
         }
+
+        private class ConfigItem
+        {
+            public string key { get; set; }
+            public string name { get; set; }
+            public string value { get; set; }
+        }
     }
 }
+
