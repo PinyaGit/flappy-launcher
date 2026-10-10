@@ -928,6 +928,7 @@ namespace FlappyReDovahLauncher
             Directory.CreateDirectory(GameRootPath);
             Directory.CreateDirectory(DownloadCacheDir);
             SaveChannel(channel);
+            try { RestoreUserMods(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods on install/repair: " + ex.Message); }
 
             var scoped = FilterByChannel(index.units, channel);
             LauncherLog.Info(jobName + " channel=" + channel + " scoped=" + scoped.Count);
@@ -1617,7 +1618,7 @@ namespace FlappyReDovahLauncher
             try
             {
                 var clientLines = File.ReadAllLines(clientPath);
-                var clientModStates = new Dictionary<string, char>(StringComparer.OrdinalIgnoreCase);
+                var clientStates = new Dictionary<string, char>(StringComparer.OrdinalIgnoreCase);
                 foreach (var cl in clientLines)
                 {
                     string t = (cl ?? "").Trim();
@@ -1627,14 +1628,78 @@ namespace FlappyReDovahLauncher
                     {
                         string name = t.Substring(1).Trim();
                         if (!string.IsNullOrEmpty(name))
-                            clientModStates[name] = prefix;
+                            clientStates[name] = prefix;
                     }
                 }
 
                 var officialLines = File.ReadAllLines(officialPath);
-                var officialSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                var merged = new List<string>(officialLines.Length + clientModStates.Count);
+                var officialNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var ol in officialLines)
+                {
+                    string t = (ol ?? "").Trim();
+                    if (t.Length == 0 || t[0] == '#') continue;
+                    string name = (t[0] == '+' || t[0] == '-') ? t.Substring(1).Trim() : t;
+                    if (!string.IsNullOrEmpty(name))
+                        officialNames.Add(name);
+                }
 
+                var lastOfficial = LoadOfficialNames();
+                string modsDir = Path.Combine(GameRootPath, "mods");
+
+                // Anchor client user entries (mods and custom separators) to the preceding official entry
+                var anchoredAfter = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                anchoredAfter[""] = new List<string>();
+
+                string lastOfficialAnchor = "";
+                var clientUserEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var raw in clientLines)
+                {
+                    string t = (raw ?? "").Trim();
+                    if (t.Length == 0 || t[0] == '#') continue;
+
+                    char prefix = t[0];
+                    string name = (prefix == '+' || prefix == '-') ? t.Substring(1).Trim() : t;
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    bool isSeparator = name.EndsWith("_separator", StringComparison.OrdinalIgnoreCase);
+
+                    if (officialNames.Contains(name))
+                    {
+                        lastOfficialAnchor = name;
+                    }
+                    else
+                    {
+                        // Non-official entry: check if it was an obsolete official mod removed by author
+                        bool wasOfficial = lastOfficial != null && lastOfficial.Contains(name);
+                        if (wasOfficial)
+                            continue;
+
+                        // If not a separator, ensure folder physically exists on disk
+                        if (!isSeparator && !Directory.Exists(Path.Combine(modsDir, name)))
+                            continue;
+
+                        List<string> list;
+                        if (!anchoredAfter.TryGetValue(lastOfficialAnchor, out list))
+                        {
+                            list = new List<string>();
+                            anchoredAfter[lastOfficialAnchor] = list;
+                        }
+                        list.Add(raw);
+                        clientUserEntries.Add(name);
+                    }
+                }
+
+                var merged = new List<string>(officialLines.Length + clientUserEntries.Count + 16);
+
+                // 1. User entries anchored before the first official entry
+                List<string> topEntries;
+                if (anchoredAfter.TryGetValue("", out topEntries))
+                {
+                    merged.AddRange(topEntries);
+                }
+
+                // 2. Official entries in official order, followed by their anchored user entries
                 foreach (var ol in officialLines)
                 {
                     string t = (ol ?? "").Trim();
@@ -1644,47 +1709,146 @@ namespace FlappyReDovahLauncher
                         continue;
                     }
 
-                    if (t.EndsWith("_separator", StringComparison.OrdinalIgnoreCase) || t[0] == '*')
+                    char prefix = t[0];
+                    string name = (prefix == '+' || prefix == '-') ? t.Substring(1).Trim() : t;
+                    bool isSeparator = name.EndsWith("_separator", StringComparison.OrdinalIgnoreCase);
+
+                    if (isSeparator || prefix == '*')
                     {
                         merged.Add(ol);
-                        continue;
                     }
-
-                    if (t[0] == '+' || t[0] == '-')
+                    else if (prefix == '+' || prefix == '-')
                     {
-                        string name = t.Substring(1).Trim();
-                        officialSeen.Add(name);
                         char userPrefix;
-                        if (clientModStates.TryGetValue(name, out userPrefix))
-                        {
+                        if (clientStates.TryGetValue(name, out userPrefix))
                             merged.Add(userPrefix + name);
-                        }
                         else
-                        {
                             merged.Add(ol);
-                        }
-                        continue;
+                    }
+                    else
+                    {
+                        merged.Add(ol);
                     }
 
-                    merged.Add(ol);
+                    // Emit user entries anchored to this official name
+                    List<string> anchored;
+                    if (anchoredAfter.TryGetValue(name, out anchored))
+                    {
+                        merged.AddRange(anchored);
+                        anchoredAfter.Remove(name);
+                    }
                 }
 
-                foreach (var pair in clientModStates)
+                // 3. Any remaining anchored entries that weren't matched
+                foreach (var kvp in anchoredAfter)
                 {
-                    if (!officialSeen.Contains(pair.Key) && !pair.Key.EndsWith("_separator", StringComparison.OrdinalIgnoreCase))
+                    if (kvp.Key == "") continue;
+                    merged.AddRange(kvp.Value);
+                }
+
+                // 4. Any unlisted user mods physically on disk in mods/
+                if (Directory.Exists(modsDir))
+                {
+                    foreach (var dir in Directory.GetDirectories(modsDir))
                     {
-                        merged.Add(pair.Value + pair.Key);
+                        string name = Path.GetFileName(dir);
+                        if (string.IsNullOrEmpty(name)) continue;
+                        if (officialNames.Contains(name)) continue;
+                        if (lastOfficial != null && lastOfficial.Contains(name)) continue;
+                        if (clientUserEntries.Contains(name)) continue;
+                        if (name.EndsWith("_separator", StringComparison.OrdinalIgnoreCase)) continue;
+
+                        int insertIdx = FindSafeUserModInsertionIndex(merged);
+                        merged.Insert(insertIdx, "+" + name);
+                        clientUserEntries.Add(name);
+                        LauncherLog.Info("SmartMergeModlistFile added unlisted user mod: " + name);
                     }
                 }
 
                 File.WriteAllLines(clientPath, merged.ToArray(), new UTF8Encoding(false));
-                LauncherLog.Info("SmartMergeModlistFile merged " + Path.GetFileName(clientPath));
+                LauncherLog.Info("SmartMergeModlistFile merged " + Path.GetFileName(clientPath) + " (preserved " + clientUserEntries.Count + " user mods/separators)");
             }
             catch (Exception ex)
             {
                 LauncherLog.Warn("SmartMergeModlistFile failed, falling back to copy: " + ex.Message);
                 try { File.Copy(officialPath, clientPath, true); } catch { }
             }
+        }
+
+        private static int FindSafeUserModInsertionIndex(List<string> lines)
+        {
+            if (lines == null || lines.Count == 0) return 0;
+
+            // Find the end of generated outputs / top separators
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string line = lines[i].Trim();
+                if (line.IndexOf("Generated", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    line.IndexOf("Output", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    int next = i + 1;
+                    while (next < lines.Count &&
+                           (lines[next].IndexOf("Output", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            lines[next].IndexOf("Generated", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                            lines[next].IndexOf("не удалять", StringComparison.OrdinalIgnoreCase) >= 0))
+                    {
+                        next++;
+                    }
+                    return Math.Min(lines.Count, next);
+                }
+            }
+
+            int idx = 0;
+            while (idx < lines.Count && (lines[idx].StartsWith("#") || string.IsNullOrWhiteSpace(lines[idx])))
+                idx++;
+            return idx;
+        }
+
+        private static HashSet<string> ScanExistingPluginNames()
+        {
+            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                string modsDir = Path.Combine(GameRootPath, "mods");
+                if (Directory.Exists(modsDir))
+                {
+                    foreach (var modDir in Directory.GetDirectories(modsDir))
+                    {
+                        foreach (var file in Directory.GetFiles(modDir))
+                        {
+                            string ext = Path.GetExtension(file);
+                            if (ext.Equals(".esp", StringComparison.OrdinalIgnoreCase) ||
+                                ext.Equals(".esm", StringComparison.OrdinalIgnoreCase) ||
+                                ext.Equals(".esl", StringComparison.OrdinalIgnoreCase))
+                            {
+                                set.Add(Path.GetFileName(file));
+                            }
+                        }
+                    }
+                }
+                foreach (var sub in new[] { "StockGame", "StockGameVR" })
+                {
+                    string dataDir = Path.Combine(GameRootPath, sub, "Data");
+                    if (Directory.Exists(dataDir))
+                    {
+                        foreach (var file in Directory.GetFiles(dataDir))
+                        {
+                            string ext = Path.GetExtension(file);
+                            if (ext.Equals(".esp", StringComparison.OrdinalIgnoreCase) ||
+                                ext.Equals(".esm", StringComparison.OrdinalIgnoreCase) ||
+                                ext.Equals(".esl", StringComparison.OrdinalIgnoreCase))
+                            {
+                                set.Add(Path.GetFileName(file));
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("ScanExistingPluginNames: " + ex.Message);
+            }
+            return set;
         }
 
         public static void SmartMergePluginsFile(string officialPath, string clientPath)
@@ -1738,11 +1902,16 @@ namespace FlappyReDovahLauncher
                     }
                 }
 
+                var existingPlugins = ScanExistingPluginNames();
+
                 foreach (var pair in clientStates)
                 {
                     if (!officialSeen.Contains(pair.Key))
                     {
-                        merged.Add(pair.Value ? ("*" + pair.Key) : pair.Key);
+                        if (existingPlugins.Count == 0 || existingPlugins.Contains(pair.Key))
+                        {
+                            merged.Add(pair.Value ? ("*" + pair.Key) : pair.Key);
+                        }
                     }
                 }
 
@@ -1784,13 +1953,18 @@ namespace FlappyReDovahLauncher
                     merged.Add(ol);
                 }
 
+                var existingPlugins = ScanExistingPluginNames();
+
                 foreach (var cl in clientLines)
                 {
                     string t = (cl ?? "").Trim();
                     if (t.Length > 0 && t[0] != '#' && !officialSeen.Contains(t))
                     {
-                        merged.Add(cl);
-                        officialSeen.Add(t);
+                        if (existingPlugins.Count == 0 || existingPlugins.Contains(t))
+                        {
+                            merged.Add(cl);
+                            officialSeen.Add(t);
+                        }
                     }
                 }
 
@@ -1871,6 +2045,8 @@ namespace FlappyReDovahLauncher
                 },
                 cancel,
                 out fromLocal);
+
+            try { RestoreUserMods(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods before delta: " + ex.Message); }
 
             // 2. Extract delta package to staging directory
             string extractMsg = Loc.IsRu ? ("Обновление: распаковка " + patchName) : ("Update: extracting " + patchName);
@@ -2058,9 +2234,8 @@ namespace FlappyReDovahLauncher
         }
 
         /// <summary>
-        /// Profiles and their modlist/plugins are unpacked directly from official packages.
-        /// Stale snapshots are not restored. Extra folders in mods\ are moved to UserMods.
-        /// Pack-removed mods are deleted.
+        /// Restores user mods from UserMods back to mods\, cleans removed official mods,
+        /// and preserves user mods and relative positions in profiles modlist.
         /// </summary>
         public static void RestoreModOrder(Index index)
         {
@@ -2071,6 +2246,9 @@ namespace FlappyReDovahLauncher
             }
             catch { }
 
+            // 1. Restore any previously quarantined user mods
+            RestoreUserMods();
+
             var lastOfficial = LoadOfficialNames();
             HashSet<string> newOfficial = null;
             if (index != null && index.units != null)
@@ -2080,23 +2258,25 @@ namespace FlappyReDovahLauncher
 
             if (newOfficial != null && newOfficial.Count > 0)
             {
-                QuarantineExtraMods(lastOfficial, newOfficial);
-                CleanProfilesModlists(newOfficial);
+                CleanRemovedOfficialMods(lastOfficial, newOfficial);
+                CleanProfilesModlists(newOfficial, lastOfficial);
+                EnsureUserModsInProfiles(newOfficial);
                 SaveOfficialNames(newOfficial);
             }
         }
 
-        private static void CleanProfilesModlists(HashSet<string> officialMods)
+        private static void CleanProfilesModlists(HashSet<string> officialMods, HashSet<string> lastOfficial)
         {
             if (officialMods == null || officialMods.Count == 0) return;
             string profilesDir = Path.Combine(GameRootPath, "profiles");
             if (!Directory.Exists(profilesDir)) return;
 
-            CleanModlistInDirectory(profilesDir, officialMods);
+            CleanModlistInDirectory(profilesDir, officialMods, lastOfficial);
         }
 
-        private static void CleanModlistInDirectory(string baseDir, HashSet<string> officialMods)
+        private static void CleanModlistInDirectory(string baseDir, HashSet<string> officialMods, HashSet<string> lastOfficial)
         {
+            string modsDir = Path.Combine(GameRootPath, "mods");
             foreach (var profileDir in Directory.GetDirectories(baseDir))
             {
                 string modlistPath = Path.Combine(profileDir, "modlist.txt");
@@ -2122,8 +2302,21 @@ namespace FlappyReDovahLauncher
                             entry = entry.Substring(1).Trim();
 
                         bool isSeparator = entry.EndsWith("_separator", StringComparison.OrdinalIgnoreCase);
-                        if (isSeparator || officialMods.Contains(entry))
+                        bool wasOfficial = lastOfficial != null && lastOfficial.Contains(entry);
+                        bool isRemovedOfficial = wasOfficial && !officialMods.Contains(entry);
+                        bool existsInMods = Directory.Exists(Path.Combine(modsDir, entry));
+
+                        if (isSeparator)
                         {
+                            cleanLines.Add(raw);
+                        }
+                        else if (officialMods.Contains(entry))
+                        {
+                            cleanLines.Add(raw);
+                        }
+                        else if (!isRemovedOfficial && existsInMods)
+                        {
+                            // Active user mod on disk: preserve!
                             cleanLines.Add(raw);
                         }
                         else
@@ -2143,22 +2336,6 @@ namespace FlappyReDovahLauncher
                     LauncherLog.Warn("clean modlist.txt (" + Path.GetFileName(profileDir) + "): " + ex.Message);
                 }
             }
-        }
-
-        /// <summary>MO2 folder names from modlist.txt (+/- prefix stripped).</summary>
-        private static HashSet<string> ParseModlistNames(string modlistPath)
-        {
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            if (!File.Exists(modlistPath)) return set;
-            foreach (string raw in File.ReadAllLines(modlistPath))
-            {
-                string line = (raw ?? "").Trim();
-                if (line.Length == 0 || line[0] == '#') continue;
-                if (line[0] == '+' || line[0] == '-')
-                    line = line.Substring(1).Trim();
-                if (line.Length > 0) set.Add(line);
-            }
-            return set;
         }
 
         private static string OfficialNamesPath
@@ -2205,17 +2382,146 @@ namespace FlappyReDovahLauncher
             }
         }
 
+        public static void RestoreUserMods()
+        {
+            try
+            {
+                string userModsDir = UserModsDir;
+                if (!Directory.Exists(userModsDir)) return;
+
+                string modsDir = Path.Combine(GameRootPath, "mods");
+                if (!Directory.Exists(modsDir)) return;
+
+                int restored = 0;
+                foreach (var dir in Directory.GetDirectories(userModsDir))
+                {
+                    string name = Path.GetFileName(dir);
+                    if (string.IsNullOrEmpty(name)) continue;
+
+                    string cleanName = name;
+                    var match = System.Text.RegularExpressions.Regex.Match(name, @"^(.+)_\d{8}_\d{6}$");
+                    if (match.Success)
+                    {
+                        cleanName = match.Groups[1].Value;
+                    }
+
+                    string dest = Path.Combine(modsDir, cleanName);
+                    if (!Directory.Exists(dest))
+                    {
+                        MoveDirectory(dir, dest);
+                        restored++;
+                        LauncherLog.Info("restored user mod from UserMods: " + name + " -> " + dest);
+                    }
+                    else if (!Directory.Exists(Path.Combine(modsDir, name)))
+                    {
+                        MoveDirectory(dir, Path.Combine(modsDir, name));
+                        restored++;
+                        LauncherLog.Info("restored user mod (with suffix): " + name);
+                    }
+                    else
+                    {
+                        LauncherLog.Info("user mod already in mods/: " + name);
+                    }
+                }
+
+                var remainingDirs = Directory.GetDirectories(userModsDir);
+                if (remainingDirs.Length == 0)
+                {
+                    string readme = Path.Combine(userModsDir, "README.txt");
+                    if (File.Exists(readme))
+                    {
+                        try { File.Delete(readme); } catch { }
+                    }
+                    try { Directory.Delete(userModsDir); } catch { }
+                }
+
+                if (restored > 0)
+                {
+                    LauncherLog.Info("RestoreUserMods: restored=" + restored);
+                    EnsureUserModsInProfiles();
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("RestoreUserMods: " + ex.Message);
+            }
+        }
+
+        public static void EnsureUserModsInProfiles(HashSet<string> officialMods = null)
+        {
+            try
+            {
+                string modsDir = Path.Combine(GameRootPath, "mods");
+                string profilesDir = Path.Combine(GameRootPath, "profiles");
+                if (!Directory.Exists(modsDir) || !Directory.Exists(profilesDir)) return;
+
+                var lastOfficial = LoadOfficialNames();
+                var official = officialMods ?? lastOfficial;
+
+                var userModsOnDisk = new List<string>();
+                foreach (var dir in Directory.GetDirectories(modsDir))
+                {
+                    string name = Path.GetFileName(dir);
+                    if (string.IsNullOrEmpty(name)) continue;
+                    if (name.EndsWith("_separator", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (official != null && official.Contains(name)) continue;
+                    if (lastOfficial != null && lastOfficial.Contains(name)) continue;
+                    userModsOnDisk.Add(name);
+                }
+
+                if (userModsOnDisk.Count == 0) return;
+
+                foreach (var profileDir in Directory.GetDirectories(profilesDir))
+                {
+                    string modlistPath = Path.Combine(profileDir, "modlist.txt");
+                    if (!File.Exists(modlistPath)) continue;
+
+                    var lines = new List<string>(File.ReadAllLines(modlistPath));
+                    var existingInModlist = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var l in lines)
+                    {
+                        string t = (l ?? "").Trim();
+                        if (t.Length == 0 || t[0] == '#') continue;
+                        string entry = (t[0] == '+' || t[0] == '-') ? t.Substring(1).Trim() : t;
+                        if (!string.IsNullOrEmpty(entry)) existingInModlist.Add(entry);
+                    }
+
+                    int added = 0;
+                    int insertIdx = FindSafeUserModInsertionIndex(lines);
+                    foreach (var userMod in userModsOnDisk)
+                    {
+                        if (!existingInModlist.Contains(userMod))
+                        {
+                            lines.Insert(insertIdx, "+" + userMod);
+                            insertIdx++;
+                            added++;
+                            LauncherLog.Info("Ensured user mod in profile " + Path.GetFileName(profileDir) + ": +" + userMod);
+                        }
+                    }
+
+                    if (added > 0)
+                    {
+                        File.WriteAllLines(modlistPath, lines.ToArray(), new UTF8Encoding(false));
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("EnsureUserModsInProfiles: " + ex.Message);
+            }
+        }
+
         /// <summary>
-        /// Folders in mods\ that are not on the new official list would be auto-appended
-        /// by MO2 as disabled. User mods go next to the launcher. Pack-removed mods are deleted.
+        /// Only deletes mods that were in lastOfficial but removed in newOfficial (pack author deletions).
+        /// User-installed mods are preserved in mods\.
         /// </summary>
-        private static void QuarantineExtraMods(HashSet<string> lastOfficial, HashSet<string> newOfficial)
+        private static void CleanRemovedOfficialMods(HashSet<string> lastOfficial, HashSet<string> newOfficial)
         {
             string modsDir = Path.Combine(GameRootPath, "mods");
             if (!Directory.Exists(modsDir)) return;
             if (newOfficial == null || newOfficial.Count == 0) return;
 
-            int userMoved = 0, packDeleted = 0;
+            int packDeleted = 0;
             foreach (string dir in Directory.GetDirectories(modsDir))
             {
                 string name = Path.GetFileName(dir);
@@ -2223,39 +2529,27 @@ namespace FlappyReDovahLauncher
                     continue;
 
                 bool wasOfficial = lastOfficial != null && lastOfficial.Contains(name);
-                try
+                if (wasOfficial)
                 {
-                    if (wasOfficial)
+                    try
                     {
                         DeleteDirectoryRobust(dir);
                         packDeleted++;
                         LauncherLog.Info("pack-removed deleted: " + name);
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        Directory.CreateDirectory(UserModsDir);
-                        string dest = UniqueDest(UserModsDir, name);
-                        MoveDirectory(dir, dest);
-                        userMoved++;
-                        LauncherLog.Info("user-mod " + name + " -> " + dest);
+                        LauncherLog.Warn("pack-removed " + name + ": " + ex.Message);
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    LauncherLog.Warn("quarantine " + name + ": " + ex.Message);
+                    LauncherLog.Info("user-mod kept in mods/: " + name);
                 }
             }
 
-            if (userMoved > 0)
-            {
-                TryWriteReadme(UserModsDir,
-                    "Пользовательские моды, установленные вручную.\r\n\r\n" +
-                    "Лаунчер переместил их сюда при обновлении/починке игры, чтобы они не ломали порядок модов и не вызывали вылетов в Mod Organizer 2.\r\n" +
-                    "Если вам нужен какой-то из этих модов, скопируйте его папку обратно в директорию mods\\ игры после завершения обновления.\r\n");
-            }
-
-            if (userMoved + packDeleted > 0)
-                LauncherLog.Info("quarantine user=" + userMoved + " pack-removed-deleted=" + packDeleted);
+            if (packDeleted > 0)
+                LauncherLog.Info("clean removed official mods: deleted=" + packDeleted);
         }
 
         private static string UniqueDest(string root, string name)
@@ -2617,6 +2911,7 @@ namespace FlappyReDovahLauncher
                 throw new FlappyException("Missing " + Path.GetFileName(iniProfile));
 
             EnsureInstalledPath(regPath, stockDir);
+            try { RestoreUserMods(); EnsureUserModsInProfiles(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods on LaunchMo: " + ex.Message); }
             PatchModOrganizerIni(iniMain, profileName, gameName, stockDir.TrimEnd('\\'));
 
             // UI only: -p profile
