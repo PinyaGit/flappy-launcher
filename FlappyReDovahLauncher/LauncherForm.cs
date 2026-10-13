@@ -2486,7 +2486,10 @@ namespace FlappyReDovahLauncher
                 IsReady = true;
 
                 if (isInstall)
+                {
+                    _cachedIndex = null;
                     PromptCleanInstallCache();
+                }
 
                 if (launchAfter && Constants.AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING)
                     LaunchGamePackageMode();

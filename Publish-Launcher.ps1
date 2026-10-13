@@ -121,18 +121,46 @@ $json = ($jsonObj | ConvertTo-Json -Depth 5) + "`n"
 $utf8 = New-Object System.Text.UTF8Encoding $false
 [IO.File]::WriteAllText((Join-Path $localCdn 'version.json'), $json, $utf8)
 
-# --- 4. Copy to CDN (via Samba) ---
+# --- 4. Copy to CDN (via Samba or SFTP) ---
 Write-Host "[4/4] Publishing to CDN: $CdnPath" -ForegroundColor Cyan
-if (-not (Test-Path $CdnPath)) {
-    Write-Warning "CDN path not accessible: $CdnPath"
-    Write-Host "  -> Files saved locally to: $localCdn"
-    Write-Host "  -> Run with -CdnPath to set target, or map \\192.168.1.119\cdn"
-} else {
+$publishedToCdn = $false
+if (Test-Path $CdnPath) {
     New-Item -ItemType Directory -Force -Path $CdnPath | Out-Null
     Copy-Item (Join-Path $localCdn $zipName)       (Join-Path $CdnPath $zipName)      -Force
     Copy-Item (Join-Path $localCdn 'version.json') (Join-Path $CdnPath 'version.json') -Force
     Copy-Item (Join-Path $publish $exeName)        (Join-Path $CdnPath $exeName)       -Force
-    Write-Host "  -> Published to CDN!" -ForegroundColor Green
+    Write-Host "  -> Published to CDN via SMB!" -ForegroundColor Green
+    $publishedToCdn = $true
+}
+
+$pscp = Join-Path $root 'tools\pscp.exe'
+if (-not $publishedToCdn -and (Test-Path $pscp)) {
+    Write-Host "  -> SMB not available, uploading via SFTP (pscp.exe)..." -ForegroundColor Cyan
+    $hostKey = 'SHA256:J9hun9+jVWXsJVGB9yCuhbQrYQUblm2nvbny/wf/iHk'
+    $serverPass = if ($env:FLAPPY_SERVER_PASS) { $env:FLAPPY_SERVER_PASS } else { 'fX7BpN4h0ABXkA' }
+    & $pscp -batch -hostkey $hostKey -l root -pw $serverPass `
+        (Join-Path $localCdn $zipName) (Join-Path $localCdn 'version.json') (Join-Path $publish $exeName) `
+        "192.168.1.119:/var/www/cdn.flappy.su/launcher/"
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "  -> Published to CDN via SFTP!" -ForegroundColor Green
+        $publishedToCdn = $true
+    } else {
+        Write-Warning "pscp upload failed with exit code $LASTEXITCODE"
+    }
+}
+
+if (-not $publishedToCdn) {
+    Write-Warning "CDN path not accessible: $CdnPath"
+    Write-Host "  -> Files saved locally to: $localCdn"
+    Write-Host "  -> Run with -CdnPath to set target, or map \\192.168.1.119\cdn"
+}
+
+# Also update launcher in local C:\Games\Flappy if present
+$localGameFlappy = "C:\Games\Flappy"
+if (Test-Path $localGameFlappy) {
+    Write-Host "  -> Updating local $localGameFlappy..." -ForegroundColor Cyan
+    Copy-Item (Join-Path $publish $exeName) (Join-Path $localGameFlappy $exeName) -Force
+    Write-Host "  -> Local launcher updated in $localGameFlappy!" -ForegroundColor Green
 }
 
 Write-Host ""

@@ -102,7 +102,28 @@ namespace FlappyReDovahLauncher
 
         public static Index FetchIndex()
         {
-            // Same index for online and torrent installs: prefer CDN, fall back to local bundle offline.
+            // If the game is not installed yet and we have a local package bundle (torrent),
+            // prefer the local bundle index so file sizes and hashes match the downloaded archives.
+            if (!IsInstalled() && Constants.HasLocalPackageBundle)
+            {
+                string localIndex = Constants.LOCAL_INDEX_PATH;
+                if (!string.IsNullOrEmpty(localIndex) && File.Exists(localIndex))
+                {
+                    try
+                    {
+                        string json = File.ReadAllText(localIndex, Encoding.UTF8);
+                        var idx = DeserializeIndex(json);
+                        LauncherLog.Info("Index from LOCAL bundle (fresh install) v" + idx.version + " units=" + idx.units.Count);
+                        return idx;
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("Local bundle index read failed: " + ex.Message);
+                    }
+                }
+            }
+
+            // Prefer CDN for updates/repairs/online installs, fall back to local bundle offline.
             Exception cdnError = null;
             try
             {
@@ -117,12 +138,12 @@ namespace FlappyReDovahLauncher
                 LauncherLog.Warn("CDN index failed: " + ex.Message);
             }
 
-            string localIndex = Constants.LOCAL_INDEX_PATH;
-            if (!string.IsNullOrEmpty(localIndex) && File.Exists(localIndex))
+            string fallbackLocalIndex = Constants.LOCAL_INDEX_PATH;
+            if (!string.IsNullOrEmpty(fallbackLocalIndex) && File.Exists(fallbackLocalIndex))
             {
                 try
                 {
-                    string json = File.ReadAllText(localIndex, Encoding.UTF8);
+                    string json = File.ReadAllText(fallbackLocalIndex, Encoding.UTF8);
                     var idx = DeserializeIndex(json);
                     LauncherLog.Info("Index from LOCAL bundle v" + idx.version + " units=" + idx.units.Count);
                     return idx;
