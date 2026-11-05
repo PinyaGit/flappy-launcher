@@ -40,6 +40,7 @@ namespace FlappyReDovahLauncher
 
         private bool _isReady;
         private bool _isInstalled;
+        private bool _installWithCompact;
         private bool _busyState;
         private bool _busy
         {
@@ -689,6 +690,7 @@ namespace FlappyReDovahLauncher
             }
 
             RedrawLayered(force: true);
+            try { DiscordRpc.Initialize(); } catch { }
             InitializePackageMode();
         }
 
@@ -698,6 +700,7 @@ namespace FlappyReDovahLauncher
             {
                 var game = GameCatalog.Current;
                 LauncherLog.Info("Game page: " + game.Id + " launcher v" + FormatShortVersion(LauncherSelfUpdate.GetLocalVersion()));
+                try { DiscordRpc.UpdatePresence("In Launcher", game != null ? game.Title : "Skyrim"); } catch { }
                 _cachedIndex = null;
                 OnlineVersion = null;
 
@@ -1537,6 +1540,7 @@ namespace FlappyReDovahLauncher
 
             if (_rcClose.Contains(p))
             {
+                try { DiscordRpc.Shutdown(); } catch { }
                 Environment.Exit(0);
                 return;
             }
@@ -1638,6 +1642,9 @@ namespace FlappyReDovahLauncher
                     break;
                 case SettingsAction.Uninstall:
                     OnClickUninstall();
+                    break;
+                case SettingsAction.Compact:
+                    OnClickCompact();
                     break;
             }
         }
@@ -1746,6 +1753,7 @@ namespace FlappyReDovahLauncher
             string reportCategory;
             string reportTitle;
             string reportDetails;
+            bool publishToDiscord;
 
             using (var form = new BugReportForm())
             {
@@ -1755,6 +1763,7 @@ namespace FlappyReDovahLauncher
                 reportCategory = form.SelectedCategory;
                 reportTitle = form.ReportTitle;
                 reportDetails = form.ReportDetails;
+                publishToDiscord = form.PublishToDiscord;
             }
 
             _busy = true;
@@ -1780,48 +1789,51 @@ namespace FlappyReDovahLauncher
 
                 string shareUrl = null;
                 string shareError = null;
-                try
-                {
-                    shareUrl = PingvinShareUploader.UploadAsync(
-                        archive,
-                        (pct, msg) => worker.ReportProgress(0, UiProgress.Make(pct, -1, msg)),
-                        token).GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    shareError = ex.Message;
-                    LauncherLog.Warn("PingvinShare upload failed: " + ex.Message);
-                }
-
                 string discordThreadUrl = null;
                 string discordThreadName = null;
                 string discordError = null;
 
-                if (!string.IsNullOrEmpty(shareUrl))
+                if (publishToDiscord)
                 {
-                    worker.ReportProgress(0, UiProgress.Make(96, -1, Loc.IsRu ? "Создание тикета в Discord…" : "Creating Discord ticket…"));
                     try
                     {
-                        var discRes = DiscordBugReporter.SubmitAsync(
-                            reportCategory,
-                            reportTitle,
-                            reportDetails,
-                            shareUrl,
-                            FormatShortVersion(LauncherSelfUpdate.GetLocalVersion()),
-                            PackageInstaller.GetLocalVersion().ToString(),
+                        shareUrl = PingvinShareUploader.UploadAsync(
+                            archive,
+                            (pct, msg) => worker.ReportProgress(0, UiProgress.Make(pct, -1, msg)),
                             token).GetAwaiter().GetResult();
-
-                        if (discRes != null && discRes.Success)
-                        {
-                            discordThreadUrl = discRes.ThreadUrl;
-                            discordThreadName = discRes.ThreadName;
-                            LauncherLog.Info("Discord bug ticket created: " + discordThreadUrl);
-                        }
                     }
                     catch (Exception ex)
                     {
-                        discordError = ex.Message;
-                        LauncherLog.Warn("Discord bot submit failed: " + ex.Message);
+                        shareError = ex.Message;
+                        LauncherLog.Warn("PingvinShare upload failed: " + ex.Message);
+                    }
+
+                    if (!string.IsNullOrEmpty(shareUrl))
+                    {
+                        worker.ReportProgress(0, UiProgress.Make(96, -1, Loc.IsRu ? "Создание тикета в Discord…" : "Creating Discord ticket…"));
+                        try
+                        {
+                            var discRes = DiscordBugReporter.SubmitAsync(
+                                reportCategory,
+                                reportTitle,
+                                reportDetails,
+                                shareUrl,
+                                FormatShortVersion(LauncherSelfUpdate.GetLocalVersion()),
+                                PackageInstaller.GetLocalVersion().ToString(),
+                                token).GetAwaiter().GetResult();
+
+                            if (discRes != null && discRes.Success)
+                            {
+                                discordThreadUrl = discRes.ThreadUrl;
+                                discordThreadName = discRes.ThreadName;
+                                LauncherLog.Info("Discord bug ticket created: " + discordThreadUrl);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            discordError = ex.Message;
+                            LauncherLog.Warn("Discord bot submit failed: " + ex.Message);
+                        }
                     }
                 }
 
@@ -1832,7 +1844,8 @@ namespace FlappyReDovahLauncher
                     DiscordThreadUrl = discordThreadUrl,
                     DiscordThreadName = discordThreadName,
                     ShareError = shareError,
-                    DiscordError = discordError
+                    DiscordError = discordError,
+                    PublishedToDiscord = publishToDiscord
                 };
             };
             bw.ProgressChanged += (o, args) =>
@@ -1856,6 +1869,7 @@ namespace FlappyReDovahLauncher
                 string threadUrl = outcome != null ? outcome.DiscordThreadUrl : null;
                 string threadName = outcome != null ? outcome.DiscordThreadName : null;
                 string shareError = outcome != null ? outcome.ShareError : null;
+                bool published = outcome != null && outcome.PublishedToDiscord;
                 _statusText = Loc.T("ready");
                 IsReady = PackageInstaller.IsInstalled();
 
@@ -1868,13 +1882,24 @@ namespace FlappyReDovahLauncher
                 }
                 else if (!string.IsNullOrEmpty(archive))
                 {
-                    string msg = Loc.F("bugreport_done", archive) + Environment.NewLine + Environment.NewLine + Loc.T("bugreport_open_folder");
-                    if (!string.IsNullOrEmpty(shareError))
+                    string msg;
+                    if (!published)
                     {
-                        msg += Environment.NewLine + Environment.NewLine +
-                            (Loc.IsRu ? "Предупреждение: не удалось выгрузить в Flappy Share:\n" : "Warning: Failed to upload to Flappy Share:\n") +
-                            shareError;
+                        msg = Loc.IsRu
+                            ? ("Архив багрепорта успешно сформирован:\n" + archive + "\n\nПапка с файлом будет открыта в проводнике.")
+                            : ("Bug report archive generated successfully:\n" + archive + "\n\nOpening containing folder in Explorer.");
                     }
+                    else
+                    {
+                        msg = Loc.F("bugreport_done", archive) + Environment.NewLine + Environment.NewLine + Loc.T("bugreport_open_folder");
+                        if (!string.IsNullOrEmpty(shareError))
+                        {
+                            msg += Environment.NewLine + Environment.NewLine +
+                                (Loc.IsRu ? "Предупреждение: не удалось выгрузить в Flappy Share:\n" : "Warning: Failed to upload to Flappy Share:\n") +
+                                shareError;
+                        }
+                    }
+
                     MessageBox.Show(
                         msg,
                         Loc.T("bugreport_done_title"),
@@ -1894,6 +1919,7 @@ namespace FlappyReDovahLauncher
             public string DiscordThreadName;
             public string ShareError;
             public string DiscordError;
+            public bool PublishedToDiscord;
         }
 
         private void OnClickPlay()
@@ -1946,10 +1972,12 @@ namespace FlappyReDovahLauncher
         {
             if (_busy || !PackageInstaller.IsInstalled()) return;
             if (GameCatalog.Current != null && GameCatalog.Current.IsDoom) return;
+            if (!GameProcessGuard.EnsureReadyToLaunch(this)) return;
             try
             {
                 string last = PackageInstaller.GetSavedMode();
-                string mode = ModeSelectForm.ShowSelect(this, last);
+                bool allowVr = GameCatalog.Current != null && GameCatalog.Current.SupportsVr;
+                string mode = ModeSelectForm.ShowSelect(this, last, allowVr);
                 if (string.IsNullOrEmpty(mode))
                     return;
                 // Open full MO2 UI for the chosen profile (no auto-start game)
@@ -2011,6 +2039,30 @@ namespace FlappyReDovahLauncher
             if (r != DialogResult.Yes) return;
 
             StartRepairAsync();
+        }
+
+        private void OnClickCompact()
+        {
+            if (_busy || !PackageInstaller.IsInstalled()) return;
+
+            if (GameProcessGuard.IsGameRunning())
+            {
+                MessageBox.Show(this,
+                    Loc.IsRu ? "Игра сейчас запущена. Закройте игру перед сжатием." : "The game is currently running. Close the game before compacting.",
+                    Constants.LAUNCHER_NAME,
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
+                return;
+            }
+
+            var r = MessageBox.Show(this,
+                Loc.T("compact_ask"),
+                Loc.T("compact_btn"),
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning);
+            if (r != DialogResult.Yes) return;
+
+            StartCompactAsync();
         }
 
         private void OnClickRollback()
@@ -2160,35 +2212,31 @@ namespace FlappyReDovahLauncher
                     MessageBoxIcon.Information);
                 return;
             }
+
+            if (!PackageInstaller.IsInstalled())
+            {
+                string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/');
+                bool insideGame = File.Exists(Path.Combine(baseDir, "ModOrganizer.exe"))
+                    || Directory.Exists(Path.Combine(baseDir, "StockGame"))
+                    || (GameCatalog.Current != null && GameCatalog.Current.IsDoom && File.Exists(Path.Combine(baseDir, "zandronum.exe")));
+
+                if (!insideGame)
+                {
+                    using (var dlg = new InstallLocationForm(GameCatalog.Current))
+                    {
+                        if (dlg.ShowDialog(this) != DialogResult.OK)
+                            return;
+
+                        _installWithCompact = dlg.EnableCompact;
+                        GameCatalog.SetCustomInstallRoot(GameCatalog.Current.Id, dlg.SelectedPath);
+                    }
+                }
+            }
+
             if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
                 return;
 
-            if (PackageInstaller.IsInstalled())
-            {
-                try
-                {
-                    var index = _cachedIndex ?? PackageInstaller.FetchIndex();
-                    var userMods = PackageInstaller.DetectUserMods(index);
-                    if (userMods != null && userMods.Count > 0)
-                    {
-                        var choice = UserModsActionForm.ShowPrompt(this, userMods.Count);
-                        if (!choice.HasValue) return;
-                        PackageInstaller.CurrentUpdateMode = choice.Value;
-                    }
-                    else
-                    {
-                        PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
-                    }
-                }
-                catch
-                {
-                    PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
-                }
-            }
-            else
-            {
-                PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
-            }
+            PackageInstaller.CurrentUpdateMode = UserModsAction.CleanCanon;
 
             InstallChannel channel;
             try { channel = ResolveChannelForJob(allowPrompt: true); }
@@ -2218,32 +2266,7 @@ namespace FlappyReDovahLauncher
             if (!AccessGate.EnsureUnlocked(this, GameCatalog.Current))
                 return;
 
-            if (PackageInstaller.IsInstalled())
-            {
-                try
-                {
-                    var index = _cachedIndex ?? PackageInstaller.FetchIndex();
-                    var userMods = PackageInstaller.DetectUserMods(index);
-                    if (userMods != null && userMods.Count > 0)
-                    {
-                        var choice = UserModsActionForm.ShowPrompt(this, userMods.Count);
-                        if (!choice.HasValue) return;
-                        PackageInstaller.CurrentUpdateMode = choice.Value;
-                    }
-                    else
-                    {
-                        PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
-                    }
-                }
-                catch
-                {
-                    PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
-                }
-            }
-            else
-            {
-                PackageInstaller.CurrentUpdateMode = UserModsAction.Preserve;
-            }
+            PackageInstaller.CurrentUpdateMode = UserModsAction.CleanCanon;
 
             var channel = PackageInstaller.GetSavedChannel();
 
@@ -2379,8 +2402,122 @@ namespace FlappyReDovahLauncher
                     _statusText = Loc.T("ready");
                     RefreshVersionText();
                     IsReady = true;
+
+                    try
+                    {
+                        GameConfigManager.CleanLocalContentCatalog();
+                        GameConfigManager.AutoConfigureResolution(out _, out _, out _);
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("Post-repair maintenance failed: " + ex.Message);
+                    }
                 };
                 bw2.RunWorkerAsync();
+            };
+            bw.RunWorkerAsync();
+        }
+
+        private void StartCompactAsync(Action onCompleted = null)
+        {
+            if (_busy || !PackageInstaller.IsInstalled()) return;
+
+            string targetDir = PackageInstaller.GameRootPath;
+            if (string.IsNullOrEmpty(targetDir) || !Directory.Exists(targetDir)) return;
+
+            _busy = true;
+            RefreshPlayState();
+            _showProgress = true;
+            _showReady = false;
+            _statusText = Loc.T("compact_status");
+            _progressOverall = 0;
+            _progressCurrent = -1;
+            if (_jobCts != null) { try { _jobCts.Dispose(); } catch { } }
+            _jobCts = new CancellationTokenSource();
+            var token = _jobCts.Token;
+            RedrawLayered(force: true);
+
+            var bw = new BackgroundWorker();
+            bw.WorkerReportsProgress = true;
+            bw.DoWork += (o, args) =>
+            {
+                var worker = (BackgroundWorker)o;
+                string compactExe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "compact.exe");
+                if (!File.Exists(compactExe)) compactExe = "compact.exe";
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = compactExe,
+                    Arguments = "/C /S /A /I /EXE:XPRESS8K *",
+                    WorkingDirectory = targetDir,
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                };
+
+                using (var proc = new Process { StartInfo = psi })
+                {
+                    int filesCount = 0;
+                    object sync = new object();
+                    proc.OutputDataReceived += (s, e) =>
+                    {
+                        if (string.IsNullOrWhiteSpace(e.Data)) return;
+                        string line = e.Data.Trim();
+                        if (line.Contains("[OK]"))
+                        {
+                            lock (sync)
+                            {
+                                filesCount++;
+                                int c = filesCount;
+                                string shortName = line.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries)[0];
+                                worker.ReportProgress(0, UiProgress.Make(-1, -1, Loc.F("compact_progress", c, shortName)));
+                            }
+                        }
+                    };
+
+                    proc.Start();
+                    proc.BeginOutputReadLine();
+
+                    while (!proc.WaitForExit(500))
+                    {
+                        if (token.IsCancellationRequested)
+                        {
+                            try { proc.Kill(); } catch { }
+                            token.ThrowIfCancellationRequested();
+                        }
+                    }
+
+                    args.Result = filesCount;
+                }
+            };
+            bw.ProgressChanged += (o, args) =>
+            {
+                ApplyUiProgress(args.UserState);
+                RedrawLayered(force: false);
+            };
+            bw.RunWorkerCompleted += (o, args) =>
+            {
+                _busy = false;
+                RefreshPlayState();
+                _isInstalled = PackageInstaller.IsInstalled();
+                if (args.Error != null)
+                {
+                    MessageBox.Show(this, FlappyException.FormatForUser(args.Error), Loc.T("compact_btn"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    IsReady = _isInstalled;
+                    return;
+                }
+                int total = args.Result is int n ? n : 0;
+                _statusText = Loc.T("ready");
+                _progressOverall = 100;
+                _progressCurrent = -1;
+                IsReady = true;
+                RedrawLayered(force: true);
+                MessageBox.Show(this, Loc.F("compact_done", total), Loc.T("compact_btn"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+                if (onCompleted != null)
+                {
+                    try { onCompleted(); } catch { }
+                }
             };
             bw.RunWorkerAsync();
         }
@@ -2488,13 +2625,124 @@ namespace FlappyReDovahLauncher
                 if (isInstall)
                 {
                     _cachedIndex = null;
-                    PromptCleanInstallCache();
+                    try
+                    {
+                        GameConfigManager.CleanLocalContentCatalog();
+                        GameConfigManager.AutoConfigureResolution(out _, out _, out _);
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("Post-install maintenance failed: " + ex.Message);
+                    }
+
+                    // Copy launcher into game directory and create Desktop shortcut
+                    string targetDir = GameCatalog.InstallRoot;
+                    string currentExe = "";
+                    try { currentExe = Process.GetCurrentProcess().MainModule?.FileName; } catch { }
+                    if (string.IsNullOrEmpty(currentExe)) currentExe = System.Windows.Forms.Application.ExecutablePath;
+
+                    string targetExe = Path.Combine(targetDir, "Flappy Launcher.exe");
+                    try
+                    {
+                        if (!string.Equals(Path.GetFullPath(currentExe), Path.GetFullPath(targetExe), StringComparison.OrdinalIgnoreCase))
+                        {
+                            File.Copy(currentExe, targetExe, true);
+                            LauncherLog.Info("Copied launcher to: " + targetExe);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("Failed to copy launcher: " + ex.Message);
+                    }
+
+                    try
+                    {
+                        string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                        if (string.IsNullOrEmpty(desktop) || !Directory.Exists(desktop))
+                            desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+
+                        if (!string.IsNullOrEmpty(desktop) && Directory.Exists(desktop))
+                        {
+                            string scPath = Path.Combine(desktop, GameCatalog.Current.Title + ".lnk");
+                            string scTarget = File.Exists(targetExe) ? targetExe : currentExe;
+                            ShortcutHelper.CreateShortcut(scPath, scTarget, targetDir, GameCatalog.Current.Title);
+                            LauncherLog.Info("Created desktop shortcut: " + scPath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("Failed to create shortcut: " + ex.Message);
+                    }
+
+                    if (_installWithCompact)
+                    {
+                        _installWithCompact = false;
+                        StartCompactAsync(() => CheckForUpdatesAfterInstallAsync());
+                        return;
+                    }
+                    else
+                    {
+                        MessageBox.Show(
+                            this,
+                            Loc.IsRu
+                                ? ("Сборка " + GameCatalog.Current.Title + " успешно установлена!\nЯрлык создан на Рабочем столе.\n\nПримечание: Сжатие файлов игры не выполнялось.\nЕсли вам потребуется освободить 25–45 ГБ места на диске, вы всегда можете запустить сжатие в Настройках лаунчера (вкладка «Инструменты сборки»).")
+                                : (GameCatalog.Current.Title + " installation complete!\nA desktop shortcut has been created.\n\nNote: Game file compression was not performed.\nIf you want to free up 25–45 GB of disk space later, you can run CompactOS compression at any time in Launcher Settings (Modpack Tools tab)."),
+                            GameCatalog.Current.Title,
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Information);
+
+                        CheckForUpdatesAfterInstallAsync();
+                    }
                 }
 
                 if (launchAfter && Constants.AUTOMATICALLY_LAUNCH_GAME_AFTER_UPDATING)
                     LaunchGamePackageMode();
             };
             bw.RunWorkerAsync();
+        }
+
+        private async void CheckForUpdatesAfterInstallAsync()
+        {
+            try
+            {
+                var game = GameCatalog.Current;
+                if (game == null || !game.Available || game.IsDoom) return;
+
+                var onlineIndex = await System.Threading.Tasks.Task.Run(() => PackageInstaller.FetchIndexOnline());
+                if (onlineIndex == null) return;
+
+                _cachedIndex = onlineIndex;
+                OnlineVersion = PackageInstaller.ParseVersion(onlineIndex.version);
+                var localVer = PackageInstaller.GetLocalVersion();
+
+                if (OnlineVersion != null && OnlineVersion > localVer)
+                {
+                    _playState = PlayButtonState.Update;
+                    _statusText = Loc.T("update_available");
+                    RefreshVersionText();
+                    RedrawLayered(force: true);
+
+                    string onlStr = FormatShortVersion(OnlineVersion);
+                    string locStr = FormatShortVersion(localVer);
+                    var ask = MessageBox.Show(
+                        this,
+                        Loc.IsRu
+                            ? ("Сборка " + game.Title + " успешно распакована (v" + locStr + ")!\nНа сервере уже доступно обновление v" + onlStr + ".\n\nХотите обновить игру прямо сейчас?")
+                            : (game.Title + " installed successfully (v" + locStr + ")!\nAn update to v" + onlStr + " is already available on the server.\n\nDo you want to update now?"),
+                        Loc.IsRu ? "Доступно обновление" : "Update Available",
+                        MessageBoxButtons.YesNo,
+                        MessageBoxIcon.Question);
+
+                    if (ask == DialogResult.Yes)
+                    {
+                        StartPackageInstallAsync();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("CheckForUpdatesAfterInstallAsync error: " + ex.Message);
+            }
         }
 
         private void PromptCleanInstallCache()
@@ -2545,7 +2793,7 @@ namespace FlappyReDovahLauncher
                 string sizeStr = FormatApproxSize(totalBytes);
                 string msg = Loc.F("clean_cache_ask", sizeStr);
 
-                var res = MessageBox.Show(this, msg, GameCatalog.Current.Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                var res = MessageBox.Show(this, msg, GameCatalog.Current.Title, MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2);
                 if (res == DialogResult.Yes)
                 {
                     int deleted = 0;
@@ -2565,6 +2813,26 @@ namespace FlappyReDovahLauncher
 
         private void LaunchGamePackageMode()
         {
+            if (!GameProcessGuard.EnsureReadyToLaunch(this)) return;
+
+            if (!LauncherSettings.WarnedOneDrive)
+            {
+                if (SystemDoctor.IsOneDriveDocuments(out string oneDrivePath))
+                {
+                    LauncherSettings.WarnedOneDrive = true;
+                    LauncherSettings.Save();
+                    string title = Loc.IsRu ? "Синхронизация OneDrive" : "OneDrive Sync Warning";
+                    string msg = Loc.IsRu
+                        ? "Обнаружено, что системная папка «Документы» находится в OneDrive:\n" + oneDrivePath + "\n\n" +
+                          "Облачная синхронизация OneDrive часто блокирует файлы сохранений и логов Skyrim (CrashLogger, SKSE), что может приводить к вылетам и зависаниям игры.\n\n" +
+                          "Рекомендуется отключить синхронизацию папки 'Документы\\My Games' в параметрах OneDrive."
+                        : "The 'Documents' folder is synced with OneDrive:\n" + oneDrivePath + "\n\n" +
+                          "Real-time OneDrive sync can lock Skyrim save games and crash logs, leading to random game freezes.\n\n" +
+                          "It is recommended to exclude 'Documents\\My Games' in OneDrive settings.";
+                    MessageBox.Show(this, msg, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+
             try
             {
                 if (GameCatalog.Current != null && GameCatalog.Current.IsDoom)
@@ -2573,7 +2841,8 @@ namespace FlappyReDovahLauncher
                     return;
                 }
                 string last = PackageInstaller.GetSavedMode();
-                string mode = ModeSelectForm.ShowSelect(this, last);
+                bool allowVr = GameCatalog.Current != null && GameCatalog.Current.SupportsVr;
+                string mode = ModeSelectForm.ShowSelect(this, last, allowVr);
                 if (string.IsNullOrEmpty(mode))
                     return;
                 PackageInstaller.LaunchGame(mode);

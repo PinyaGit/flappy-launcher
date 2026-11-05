@@ -100,6 +100,14 @@ namespace FlappyReDovahLauncher
                     || Directory.Exists(Path.Combine(GameRootPath, "StockGameVR")));
         }
 
+        public static Index FetchIndexOnline()
+        {
+            string json = HttpDownloader.ReadAllText(Constants.INDEX_URL);
+            var idx = DeserializeIndex(json);
+            LauncherLog.Info("Index from CDN v" + idx.version + " units=" + idx.units.Count);
+            return idx;
+        }
+
         public static Index FetchIndex()
         {
             // If the game is not installed yet and we have a local package bundle (torrent),
@@ -197,7 +205,16 @@ namespace FlappyReDovahLauncher
         public static void SaveLocalVersion(string version)
         {
             string v = (version ?? "1.0.0").Trim();
-            File.WriteAllText(LocalVersionPath, v, Encoding.UTF8);
+            try { File.WriteAllText(LocalVersionPath, v, Encoding.UTF8); } catch { }
+
+            try
+            {
+                string inRoot = Path.Combine(GameRootPath, "local_version_" + GameCatalog.Current.Id + ".txt");
+                if (!string.Equals(inRoot, LocalVersionPath, StringComparison.OrdinalIgnoreCase))
+                    File.WriteAllText(inRoot, v, Encoding.UTF8);
+            }
+            catch { }
+
             if (string.Equals(GameCatalog.Current.Id, "re-dovah", StringComparison.OrdinalIgnoreCase))
             {
                 try
@@ -259,28 +276,116 @@ namespace FlappyReDovahLauncher
 
         public static VersionsManifest FetchVersionsManifest()
         {
+            var manifest = new VersionsManifest
+            {
+                game = GameCatalog.Current.Id,
+                versions = new List<VersionEntry>()
+            };
+
+            // 1. Try fetching versions.json if available
             try
             {
                 string url = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, "versions.json");
                 string json = HttpDownloader.ReadAllText(url);
-                return JsonAdapter.FromJson<VersionsManifest>(json);
+                var parsed = JsonAdapter.FromJson<VersionsManifest>(json);
+                if (parsed != null && parsed.versions != null && parsed.versions.Count > 0)
+                {
+                    return parsed;
+                }
             }
             catch (Exception ex)
             {
-                LauncherLog.Warn("FetchVersionsManifest failed: " + ex.Message);
-                return null;
+                LauncherLog.Warn("versions.json not found on CDN (" + ex.Message + "), trying dynamic discovery...");
             }
+
+            var discoveredVersions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // 2. Discover from current index.json (delta.fromVersion)
+            try
+            {
+                var curIndex = FetchIndex();
+                if (curIndex != null)
+                {
+                    if (curIndex.delta != null && !string.IsNullOrWhiteSpace(curIndex.delta.fromVersion))
+                    {
+                        discoveredVersions.Add(curIndex.delta.fromVersion.Trim());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("Discover versions from index failed: " + ex.Message);
+            }
+
+            // 3. Discover from patches/ directory listing on CDN
+            try
+            {
+                string patchesUrl = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, "patches/");
+                string html = HttpDownloader.ReadAllText(patchesUrl);
+                if (!string.IsNullOrEmpty(html))
+                {
+                    // Match patch-1.2.0-to-1.3.0.7z or delta_1.2.0_to_1.3.0.7z
+                    var matches = System.Text.RegularExpressions.Regex.Matches(
+                        html,
+                        @"(?:patch-|delta[_-])([0-9]+\.[0-9]+(?:\.[0-9]+)?)(?:-to-|_to_|\.to\.)([0-9]+\.[0-9]+(?:\.[0-9]+)?)",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+                    foreach (System.Text.RegularExpressions.Match m in matches)
+                    {
+                        if (m.Groups.Count >= 2 && !string.IsNullOrEmpty(m.Groups[1].Value))
+                            discoveredVersions.Add(m.Groups[1].Value.Trim());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("Discover versions from patches/ listing failed: " + ex.Message);
+            }
+
+            // Populate entries
+            var sorted = new List<Version>();
+            foreach (var vStr in discoveredVersions)
+            {
+                var v = ParseVersion(vStr);
+                if (v.Major > 0 || v.Minor > 0 || v.Build > 0)
+                    sorted.Add(v);
+            }
+            sorted.Sort((a, b) => b.CompareTo(a)); // Descending
+
+            foreach (var v in sorted)
+            {
+                string vStr = v.ToString();
+                manifest.versions.Add(new VersionEntry
+                {
+                    version = vStr,
+                    index = "index_" + vStr + ".json"
+                });
+            }
+
+            return manifest;
         }
 
         public static Index FetchIndexForVersion(VersionEntry entry)
         {
-            if (entry == null || string.IsNullOrEmpty(entry.index))
+            if (entry == null)
                 throw new FlappyException("Invalid version entry.");
 
-            string url = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, entry.index);
-            string json = HttpDownloader.ReadAllText(url);
-            var idx = DeserializeIndex(json);
-            return idx;
+            string targetIndexName = !string.IsNullOrEmpty(entry.index) ? entry.index : ("index_" + entry.version + ".json");
+            try
+            {
+                string url = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, targetIndexName);
+                string json = HttpDownloader.ReadAllText(url);
+                return DeserializeIndex(json);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("Index " + targetIndexName + " not found: " + ex.Message + ", falling back to main index");
+                string url = HttpDownloader.CombineUrl(GameCatalog.PackagesBaseUrl, "index.json");
+                string json = HttpDownloader.ReadAllText(url);
+                var curIdx = DeserializeIndex(json);
+                curIdx.version = entry.version;
+                return curIdx;
+            }
         }
 
         public static InstallChannel GetSavedChannel()
@@ -1179,13 +1284,23 @@ namespace FlappyReDovahLauncher
 
         private static void FinishInstallFlag(string version, string note)
         {
-            File.WriteAllText(InstallFlagPath,
-                GameCatalog.Current.Title + " installed" + Environment.NewLine +
-                "game=" + GameCatalog.Current.Id + Environment.NewLine +
-                "version=" + version + Environment.NewLine +
-                "date=" + DateTime.Now.ToString("o") + Environment.NewLine +
-                "note=" + note + Environment.NewLine,
-                Encoding.UTF8);
+            try
+            {
+                File.WriteAllText(InstallFlagPath,
+                    GameCatalog.Current.Title + " installed" + Environment.NewLine +
+                    "game=" + GameCatalog.Current.Id + Environment.NewLine +
+                    "version=" + version + Environment.NewLine +
+                    "date=" + DateTime.Now.ToString("o") + Environment.NewLine +
+                    "note=" + note + Environment.NewLine,
+                    Encoding.UTF8);
+
+                File.WriteAllText(Path.Combine(GameRootPath, ".flappy_game_id"), GameCatalog.Current.Id, Encoding.UTF8);
+                GameCatalog.SaveInstalledPathToRegistry(GameCatalog.Current.Id, GameRootPath);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("FinishInstallFlag error: " + ex.Message);
+            }
         }
 
         /// <summary>
@@ -1587,6 +1702,71 @@ namespace FlappyReDovahLauncher
             return count;
         }
 
+        public static (int dirsCleared, int overwriteFilesDeleted) ClearCacheAndOverwrite()
+        {
+            int dirsCleared = ClearShaderCache();
+            int filesDeleted = 0;
+            string root = GameRootPath;
+            if (!string.IsNullOrEmpty(root) && Directory.Exists(root))
+            {
+                string overwriteDir = Path.Combine(root, "overwrite");
+                if (Directory.Exists(overwriteDir))
+                {
+                    try
+                    {
+                        foreach (var f in Directory.GetFiles(overwriteDir, "*", SearchOption.AllDirectories))
+                        {
+                            try { File.Delete(f); filesDeleted++; } catch { }
+                        }
+                        foreach (var d in Directory.GetDirectories(overwriteDir))
+                        {
+                            try { DeleteDirectoryRobust(d); } catch { }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LauncherLog.Warn("ClearCacheAndOverwrite overwrite error: " + ex.Message);
+                    }
+                }
+            }
+            LauncherLog.Info($"ClearCacheAndOverwrite: cleared {dirsCleared} shader dirs, {filesDeleted} overwrite files");
+            return (dirsCleared, filesDeleted);
+        }
+
+        public static long GetDownloadCacheSizeBytes()
+        {
+            try
+            {
+                string dir = DownloadCacheDir;
+                if (!Directory.Exists(dir)) return 0;
+                long total = 0;
+                foreach (var fi in new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories))
+                {
+                    total += fi.Length;
+                }
+                return total;
+            }
+            catch { return 0; }
+        }
+
+        public static void ClearDownloadCache()
+        {
+            try
+            {
+                string dir = DownloadCacheDir;
+                if (Directory.Exists(dir))
+                {
+                    Directory.Delete(dir, true);
+                    Directory.CreateDirectory(dir);
+                }
+                LauncherLog.Info("Download cache cleared: " + dir);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("ClearDownloadCache failed: " + ex.Message);
+            }
+        }
+
         /// <summary>
         /// Overlay a profile archive onto an existing profile: copy packed files except saves.
         /// Client saves stay. Official modlist/plugins/loadorder are smart merged.
@@ -1637,6 +1817,23 @@ namespace FlappyReDovahLauncher
             {
                 try { if (Directory.Exists(tmp)) DeleteDirectoryRobust(tmp); } catch { }
             }
+        }
+
+        private static bool IsEnforcedOfficialMod(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (name.IndexOf("Output", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (name.IndexOf("slsbPatcher", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (name.IndexOf("FlappyLibs", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
+        }
+
+        private static bool IsEnforcedOfficialPlugin(string pluginName)
+        {
+            if (string.IsNullOrEmpty(pluginName)) return false;
+            if (pluginName.Equals("Synthesis.esp", StringComparison.OrdinalIgnoreCase)) return true;
+            if (pluginName.IndexOf("Pandora", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            return false;
         }
 
         public static void SmartMergeModlistFile(string officialPath, string clientPath)
@@ -1755,11 +1952,18 @@ namespace FlappyReDovahLauncher
                     }
                     else if (prefix == '+' || prefix == '-')
                     {
-                        char userPrefix;
-                        if (clientStates.TryGetValue(name, out userPrefix))
-                            merged.Add(userPrefix + name);
-                        else
+                        if (IsEnforcedOfficialMod(name))
+                        {
                             merged.Add(ol);
+                        }
+                        else
+                        {
+                            char userPrefix;
+                            if (clientStates.TryGetValue(name, out userPrefix))
+                                merged.Add(userPrefix + name);
+                            else
+                                merged.Add(ol);
+                        }
                     }
                     else
                     {
@@ -1928,7 +2132,11 @@ namespace FlappyReDovahLauncher
                     officialSeen.Add(name);
 
                     bool userEnabled;
-                    if (clientStates.TryGetValue(name, out userEnabled))
+                    if (IsEnforcedOfficialPlugin(name))
+                    {
+                        merged.Add(ol);
+                    }
+                    else if (clientStates.TryGetValue(name, out userEnabled))
                     {
                         merged.Add(userEnabled ? ("*" + name) : name);
                     }
@@ -2058,6 +2266,17 @@ namespace FlappyReDovahLauncher
             progress(5, -1, downloadMsg);
 
             EnsureSevenZip(progress, cancel);
+
+            // Auto-backup user saves before applying delta update
+            try
+            {
+                int saveCount;
+                SaveBackupManager.CreateBackup(out saveCount);
+            }
+            catch (Exception ex)
+            {
+                LauncherLog.Warn("Auto-backup saves before delta failed: " + ex.Message);
+            }
 
             Directory.CreateDirectory(GameRootPath);
             Directory.CreateDirectory(DownloadCacheDir);
@@ -2420,7 +2639,7 @@ namespace FlappyReDovahLauncher
             catch (Exception ex) { LauncherLog.Warn("official-names write: " + ex.Message); }
         }
 
-        public static UserModsAction CurrentUpdateMode { get; set; } = UserModsAction.Preserve;
+        public static UserModsAction CurrentUpdateMode { get; set; } = UserModsAction.CleanCanon;
 
         public static List<string> DetectUserMods(Index index)
         {
@@ -2993,6 +3212,7 @@ namespace FlappyReDovahLauncher
             args.Append(" -connect ").Append(host);
 
             LauncherLog.Info("Start Doom " + args);
+            try { DiscordRpc.UpdatePresence("Playing Doom", "Zandronum Multiplayer"); } catch { }
             Process.Start(new ProcessStartInfo
             {
                 FileName = exe,
@@ -3052,7 +3272,6 @@ namespace FlappyReDovahLauncher
                 throw new FlappyException("Missing " + Path.GetFileName(iniProfile));
 
             EnsureInstalledPath(regPath, stockDir);
-            try { RestoreUserMods(); EnsureUserModsInProfiles(); } catch (Exception ex) { LauncherLog.Warn("RestoreUserMods on LaunchMo: " + ex.Message); }
             PatchModOrganizerIni(iniMain, profileName, gameName, stockDir.TrimEnd('\\'));
 
             // UI only: -p profile
@@ -3062,6 +3281,14 @@ namespace FlappyReDovahLauncher
                 : "-p \"" + profileName + "\" \"" + execTitle + "\"";
 
             LauncherLog.Info((openUiOnly ? "Open MO2 UI " : "Start game via MO2 ") + args);
+            try
+            {
+                string title = GameCatalog.Current != null ? GameCatalog.Current.Title : "Skyrim";
+                DiscordRpc.UpdatePresence(
+                    openUiOnly ? "Mod Organizer 2" : "Playing " + title,
+                    openUiOnly ? "Modding (" + mode + ")" : (isVr ? "Skyrim VR" : "Skyrim AE"));
+            }
+            catch { }
 
             Process.Start(new ProcessStartInfo
             {

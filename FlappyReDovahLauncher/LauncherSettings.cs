@@ -10,6 +10,7 @@ namespace FlappyReDovahLauncher
         public static string Language { get; set; }
         public static int DownloadParallelism { get { return 2; } }
         public static int DownloadSpeedLimitMBps { get; set; } = 0;
+        public static bool WarnedOneDrive { get; set; } = false;
 
         private static string FilePath
         {
@@ -37,6 +38,11 @@ namespace FlappyReDovahLauncher
                         int lim;
                         if (int.TryParse(val, out lim)) DownloadSpeedLimitMBps = Math.Max(0, lim);
                     }
+                    else if (key == "warned_onedrive" || key == "onedrive_warned")
+                    {
+                        bool warned;
+                        if (bool.TryParse(val, out warned)) WarnedOneDrive = warned;
+                    }
                 }
             }
             catch (Exception ex)
@@ -50,7 +56,8 @@ namespace FlappyReDovahLauncher
             try
             {
                 string body = "lang=" + (Language ?? "") + Environment.NewLine +
-                              "speed_limit=" + DownloadSpeedLimitMBps + Environment.NewLine;
+                              "speed_limit=" + DownloadSpeedLimitMBps + Environment.NewLine +
+                              "warned_onedrive=" + WarnedOneDrive + Environment.NewLine;
                 File.WriteAllText(FilePath, body, new UTF8Encoding(false));
             }
             catch (Exception ex)

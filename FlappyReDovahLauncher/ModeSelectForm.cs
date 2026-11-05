@@ -12,7 +12,7 @@ namespace FlappyReDovahLauncher
         private readonly Button _btnAe;
         private readonly Button _btnVr;
 
-        public ModeSelectForm(string lastMode = "AE")
+        public ModeSelectForm(string lastMode = "AE", bool allowVr = true)
         {
             SelectedMode = null;
             Text = Constants.LAUNCHER_NAME;
@@ -45,9 +45,17 @@ namespace FlappyReDovahLauncher
             _btnAe.Font = new Font("Segoe UI Semibold", 12f, FontStyle.Bold);
             _btnVr.Font = new Font("Segoe UI Semibold", 12f, FontStyle.Bold);
 
-            bool lastVr = string.Equals(lastMode, "VR", StringComparison.OrdinalIgnoreCase);
+            bool lastVr = allowVr && string.Equals(lastMode, "VR", StringComparison.OrdinalIgnoreCase);
             FlappyTheme.SetHighlight(_btnAe, !lastVr);
             FlappyTheme.SetHighlight(_btnVr, lastVr);
+
+            if (!allowVr)
+            {
+                _btnVr.Enabled = false;
+                _btnVr.Text = (Loc.IsRu ? "VR\n(В разработке)" : "VR\n(In Dev)");
+                _btnVr.ForeColor = FlappyTheme.Mute;
+                _btnVr.BackColor = FlappyTheme.Panel;
+            }
 
             _btnAe.Click += (s, e) =>
             {
@@ -57,6 +65,7 @@ namespace FlappyReDovahLauncher
             };
             _btnVr.Click += (s, e) =>
             {
+                if (!allowVr) return;
                 SelectedMode = "VR";
                 DialogResult = DialogResult.OK;
                 Close();
@@ -78,9 +87,9 @@ namespace FlappyReDovahLauncher
         }
 
         /// <summary>Shows dialog. Returns "AE", "VR", or null if cancelled.</summary>
-        public static string ShowSelect(IWin32Window owner, string lastMode)
+        public static string ShowSelect(IWin32Window owner, string lastMode, bool allowVr = true)
         {
-            using (var f = new ModeSelectForm(lastMode))
+            using (var f = new ModeSelectForm(lastMode, allowVr))
             {
                 var r = owner != null ? f.ShowDialog(owner) : f.ShowDialog();
                 if (r != DialogResult.OK) return null;

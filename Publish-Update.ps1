@@ -26,13 +26,15 @@ param(
 
     [switch]$Full,
 
-    [int]$Mx = 5,
+    [int]$Mx = 9,
 
     [switch]$SkipSync,
 
     [switch]$NoClean,
 
     [switch]$ForceStockGame,
+
+    [switch]$ForceTools,
 
     [switch]$RebuildTorrent,
 
@@ -85,7 +87,7 @@ Write-Host ">>> Selected Target: $targetName ($Target)" -ForegroundColor Green
 
 # --- 2. Determine Local Game Directory ---
 if (-not $GameDir) {
-    $defaultGameDir = if ($Target -eq 're-dovah') { 'D:\Games\Flappy Re-Dovah' } else { 'D:\Games\Flappy' }
+    $defaultGameDir = if ($Target -eq 're-dovah') { 'C:\Games\Flappy Re-Dovah' } else { 'C:\Games\Flappy' }
     if (Test-Path -LiteralPath $defaultGameDir) {
         $GameDir = $defaultGameDir
     } else {
@@ -142,6 +144,17 @@ if ($isInteractive) {
         }
     }
 
+    # Tools prompt
+    if (-not $PSBoundParameters.ContainsKey('ForceTools')) {
+        Write-Host ""
+        Write-Host "--- Tools Base Packages ---" -ForegroundColor DarkCyan
+        Write-Host "  Tools is modding utilities (~2.2 GB), skipped on normal patches." -ForegroundColor DarkGray
+        $toolsChoice = Read-Host "  Repack modified Tools? [y/N, default: N]"
+        if ($toolsChoice -match '^(y|yes)$') {
+            $ForceTools = [switch]::Present
+        }
+    }
+
     # Sync prompt
     if (-not $PSBoundParameters.ContainsKey('SkipSync')) {
         Write-Host ""
@@ -169,6 +182,8 @@ if ($isInteractive) {
     $fileSyncColor  = if ($SkipSync) { 'Yellow' } else { 'Green' }
     $stockGameStr   = if ($ForceStockGame) { 'YES (force repack)' } else { 'NO (reusing existing)' }
     $stockGameColor = if ($ForceStockGame) { 'Yellow' } else { 'DarkGray' }
+    $toolsStr       = if ($ForceTools) { 'YES (force repack)' } else { 'NO (reusing existing)' }
+    $toolsColor     = if ($ForceTools) { 'Yellow' } else { 'DarkGray' }
     $torrentStr     = if ($RebuildTorrent) { 'YES (qBittorrent update)' } else { 'NO (static forum base)' }
     $torrentColor   = if ($RebuildTorrent) { 'Yellow' } else { 'DarkGray' }
 
@@ -182,6 +197,7 @@ if ($isInteractive) {
     Write-Host "  Build Mode      : $buildModeStr" -ForegroundColor DarkGray
     Write-Host "  File Sync       : $fileSyncStr" -ForegroundColor $fileSyncColor
     Write-Host "  Repack StockGame: $stockGameStr" -ForegroundColor $stockGameColor
+    Write-Host "  Repack Tools    : $toolsStr" -ForegroundColor $toolsColor
     Write-Host "  Rebuild Torrent : $torrentStr" -ForegroundColor $torrentColor
     Write-Host "============================================================" -ForegroundColor Cyan
     $confirm = Read-Host "Proceed with execution? [Y/n, default: Y]"
@@ -235,7 +251,9 @@ if (-not $SkipSync) {
         'enbcache',
         'Crash Logs',
         'crashdumps',
-        'NetScriptFramework'
+        'NetScriptFramework',
+        'RootBuilder',
+        '__pycache__'
     )
 
     $excludeFiles = @(
@@ -288,8 +306,26 @@ Write-Host "============================================================" -Foreg
 Write-Host " [2/3] Building update packages on server..." -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
-$extraStockFlag = if ($ForceStockGame) { ' --force-stock' } else { '' }
-$buildCmd = "bash /opt/builder/scripts/build-patch.sh $Target $Version $Mx $modeStr$extraStockFlag"
+    # Ensure latest builder scripts are synced to server
+    $pscp = Join-Path $root 'tools\pscp.exe'
+    $localBuildPkg = Join-Path $root 'tools\Build-Packages.ps1'
+    $localBuildPatch = Join-Path $root 'tools\build-patch.sh'
+    if (Test-Path -LiteralPath $pscp) {
+        try {
+            if (Test-Path -LiteralPath $localBuildPkg) {
+                & $pscp -hostkey $HostKey -batch -pw $ServerPass $localBuildPkg "$ServerUser@$ServerHost`:/opt/builder/tools/Build-Packages.ps1" 2>&1 | Out-Null
+            }
+            if (Test-Path -LiteralPath $localBuildPatch) {
+                & $pscp -hostkey $HostKey -batch -pw $ServerPass $localBuildPatch "$ServerUser@$ServerHost`:/opt/builder/scripts/build-patch.sh" 2>&1 | Out-Null
+            }
+        } catch {
+            Write-Host "    [WARN] Could not auto-sync builder scripts via pscp." -ForegroundColor Yellow
+        }
+    }
+
+    $extraStockFlag = if ($ForceStockGame) { ' --force-stock' } else { '' }
+    $extraToolsFlag = if ($ForceTools) { ' --force-tools' } else { '' }
+    $buildCmd = "bash /opt/builder/scripts/build-patch.sh $Target $Version $Mx $modeStr$extraStockFlag$extraToolsFlag"
 Write-Host "  Remote cmd: $buildCmd" -ForegroundColor DarkGray
 Write-Host ""
 
@@ -339,8 +375,10 @@ Write-Host "  Version         : $Version" -ForegroundColor Green
 Write-Host "  Delta           : CDN https://cdn.flappy.su/$Target/patches/ (single .7z)" -ForegroundColor Green
 Write-Host "  Full            : CDN https://cdn.flappy.su/$Target/packages/ (hardlinked)" -ForegroundColor Green
 $summaryStock = if ($ForceStockGame) { "Re-packed and published" } else { "Reused (unchanged)" }
+$summaryTools = if ($ForceTools) { "Re-packed and published" } else { "Reused (unchanged)" }
 $summaryTorrent = if ($RebuildTorrent) { "qBittorrent seeding updated" } else { "Static base (untouched for forum)" }
 Write-Host "  StockGame       : $summaryStock" -ForegroundColor Green
+Write-Host "  Tools           : $summaryTools" -ForegroundColor Green
 Write-Host "  Torrent         : $summaryTorrent" -ForegroundColor Green
 Write-Host "------------------------------------------------------------" -ForegroundColor DarkGreen
 if ($syncTimerElapsed) { Write-Host ("  Time - Sync     : {0:mm\:ss}" -f $syncTimerElapsed) -ForegroundColor DarkGray }

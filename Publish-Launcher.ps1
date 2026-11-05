@@ -1,5 +1,5 @@
 # Build Flappy Launcher Release (.NET 8) -> Publish\ + CDN
-# Builds with dotnet publish (self-contained single-file win-x64), then publishes to CDN via Samba.
+# Builds with dotnet publish (framework-dependent single-file win-x64), then publishes to CDN via Samba.
 #
 # Output:
 #   Publish\Flappy Launcher.exe
@@ -24,7 +24,7 @@ $zipName = 'Flappy-Launcher.zip'
 $zipUrlRel = "launcher/$zipName"
 
 $publish = Join-Path $root 'Publish'
-$publishNet8 = Join-Path $publish 'net8'
+$publishNet = Join-Path $publish 'net8'
 $localCdn = Join-Path $publish 'cdn-launcher'
 
 $assemblyInfo = Join-Path $root 'FlappyReDovahLauncher\Properties\AssemblyInfo.cs'
@@ -57,8 +57,7 @@ Write-Host "    Target version: $Version" -ForegroundColor Green
 # --- 1. Build ---
 if (-not $SkipBuild) {
     Write-Host "[1/4] Building .NET 8 Single-File Release..." -ForegroundColor Cyan
-    New-Item -ItemType Directory -Force -Path $publishNet8 | Out-Null
-    & dotnet publish "$csproj" -c Release -r win-x64 --self-contained true "-p:PublishSingleFile=true" "-p:IncludeNativeLibrariesForSelfExtract=true" "-p:EnableCompressionInSingleFile=true" -o "$publishNet8"
+    & dotnet publish "$csproj" -c Release -r win-x64 --no-self-contained "-p:PublishSingleFile=true" "-p:IncludeNativeLibrariesForSelfExtract=true" -o "$publishNet"
     if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed: $LASTEXITCODE" }
 } else {
     Write-Host "[1/4] SkipBuild - using existing Release binaries." -ForegroundColor Yellow
@@ -66,7 +65,7 @@ if (-not $SkipBuild) {
 
 # --- 2. Copy EXE to Publish\ ---
 Write-Host "[2/4] Copying to Publish\..." -ForegroundColor Cyan
-$fromExe = Join-Path $publishNet8 $exeName
+$fromExe = Join-Path $publishNet $exeName
 if (-not (Test-Path -LiteralPath $fromExe)) { throw "Missing: $fromExe" }
 Copy-Item -LiteralPath $fromExe -Destination (Join-Path $publish $exeName) -Force
 
@@ -137,7 +136,11 @@ $pscp = Join-Path $root 'tools\pscp.exe'
 if (-not $publishedToCdn -and (Test-Path $pscp)) {
     Write-Host "  -> SMB not available, uploading via SFTP (pscp.exe)..." -ForegroundColor Cyan
     $hostKey = 'SHA256:J9hun9+jVWXsJVGB9yCuhbQrYQUblm2nvbny/wf/iHk'
-    $serverPass = if ($env:FLAPPY_SERVER_PASS) { $env:FLAPPY_SERVER_PASS } else { 'fX7BpN4h0ABXkA' }
+    $serverPass = if ($env:FLAPPY_SERVER_PASS) { $env:FLAPPY_SERVER_PASS } else {
+        $sec = Read-Host -Prompt "Enter server password for root@192.168.1.119" -AsSecureString
+        $BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+    }
     & $pscp -batch -hostkey $hostKey -l root -pw $serverPass `
         (Join-Path $localCdn $zipName) (Join-Path $localCdn 'version.json') (Join-Path $publish $exeName) `
         "192.168.1.119:/var/www/cdn.flappy.su/launcher/"
@@ -153,14 +156,6 @@ if (-not $publishedToCdn) {
     Write-Warning "CDN path not accessible: $CdnPath"
     Write-Host "  -> Files saved locally to: $localCdn"
     Write-Host "  -> Run with -CdnPath to set target, or map \\192.168.1.119\cdn"
-}
-
-# Also update launcher in local C:\Games\Flappy if present
-$localGameFlappy = "C:\Games\Flappy"
-if (Test-Path $localGameFlappy) {
-    Write-Host "  -> Updating local $localGameFlappy..." -ForegroundColor Cyan
-    Copy-Item (Join-Path $publish $exeName) (Join-Path $localGameFlappy $exeName) -Force
-    Write-Host "  -> Local launcher updated in $localGameFlappy!" -ForegroundColor Green
 }
 
 Write-Host ""

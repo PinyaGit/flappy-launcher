@@ -13,7 +13,8 @@
     <LangVersion>latest</LangVersion>
     <Platforms>AnyCPU</Platforms>
     <SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
-    <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <ApplicationHighDpiMode>DpiUnawareGdiScaled</ApplicationHighDpiMode>
+    <NoWarn>$(NoWarn);CA1416;WFO1000;SYSLIB0014;WFO0003</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

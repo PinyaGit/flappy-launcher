@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Text;
+using Microsoft.Win32;
 using FlappyReDovahLauncher.Properties;
 
 namespace FlappyReDovahLauncher
@@ -122,20 +124,6 @@ namespace FlappyReDovahLauncher
             {
                 new GameDefinition
                 {
-                    Id = "re-dovah",
-                    Title = "Flappy Re-Dovah",
-                    ShortLabel = "Re-Dovah",
-                    CdnFolder = "re-dovah",
-                    InstallFolderName = "Re-Dovah",
-                    SplashResource = "bg_re_dovah",
-                    IconResource = "logo_re_dovah",
-                    Available = true,
-                    RequiresAccessKey = true,
-                    SupportsVr = true,
-                    Description = "Skyrim AE + VR modpack"
-                },
-                new GameDefinition
-                {
                     Id = "flappy",
                     Title = "Flappy",
                     ShortLabel = "Flappy",
@@ -148,6 +136,20 @@ namespace FlappyReDovahLauncher
                     SupportsVr = false,
                     Description = "Skyrim AE",
                     Kind = "mo2"
+                },
+                new GameDefinition
+                {
+                    Id = "re-dovah",
+                    Title = "Flappy Re-Dovah",
+                    ShortLabel = "Re-Dovah",
+                    CdnFolder = "re-dovah",
+                    InstallFolderName = "Re-Dovah",
+                    SplashResource = "bg_re_dovah",
+                    IconResource = "logo_re_dovah",
+                    Available = true,
+                    RequiresAccessKey = true,
+                    SupportsVr = true,
+                    Description = "Skyrim AE + VR modpack"
                 },
                 new GameDefinition
                 {
@@ -171,11 +173,109 @@ namespace FlappyReDovahLauncher
 
         // ---------- paths relative to current game ----------
 
+        private static readonly Dictionary<string, string> _customInstallRoots = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        public static void SetCustomInstallRoot(string gameId, string path)
+        {
+            if (string.IsNullOrEmpty(gameId)) return;
+            if (string.IsNullOrEmpty(path))
+                _customInstallRoots.Remove(gameId);
+            else
+                _customInstallRoots[gameId] = Path.GetFullPath(path);
+        }
+
+        public static string GetInstalledPathFromRegistry(string gameId)
+        {
+            if (string.IsNullOrEmpty(gameId)) return null;
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(@"Software\Flappy\" + gameId))
+                {
+                    if (k != null)
+                    {
+                        string p = k.GetValue("InstallPath") as string;
+                        if (!string.IsNullOrEmpty(p) && Directory.Exists(p))
+                            return p;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public static void SaveInstalledPathToRegistry(string gameId, string path)
+        {
+            if (string.IsNullOrEmpty(gameId) || string.IsNullOrEmpty(path)) return;
+            try
+            {
+                using (var k = Registry.CurrentUser.CreateSubKey(@"Software\Flappy\" + gameId))
+                {
+                    if (k != null)
+                        k.SetValue("InstallPath", path, RegistryValueKind.String);
+                }
+            }
+            catch { }
+        }
+
+        public static string GetInstallRoot(GameDefinition game)
+        {
+            var g = game ?? Current;
+            if (g == null) return AppDomain.CurrentDomain.BaseDirectory;
+
+            // 1. Session override (e.g. chosen during this install session)
+            if (_customInstallRoots.TryGetValue(g.Id, out string custom) && !string.IsNullOrEmpty(custom))
+                return custom;
+
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\', '/');
+
+            // 2. Is current BaseDirectory itself the game folder?
+            bool baseHasMarker = File.Exists(Path.Combine(baseDir, ".flappy_installed"))
+                || File.Exists(Path.Combine(baseDir, "ModOrganizer.exe"))
+                || Directory.Exists(Path.Combine(baseDir, "StockGame"))
+                || (g.IsDoom && File.Exists(Path.Combine(baseDir, "zandronum.exe")));
+
+            if (baseHasMarker)
+            {
+                string idFile = Path.Combine(baseDir, ".flappy_game_id");
+                if (File.Exists(idFile))
+                {
+                    try
+                    {
+                        string savedId = File.ReadAllText(idFile, Encoding.UTF8).Trim();
+                        if (string.Equals(savedId, g.Id, StringComparison.OrdinalIgnoreCase))
+                            return baseDir;
+                    }
+                    catch { }
+                }
+                else
+                {
+                    if (baseDir.EndsWith(g.InstallFolderName, StringComparison.OrdinalIgnoreCase) || g == Current)
+                        return baseDir;
+                }
+            }
+
+            // 3. Saved path in registry HKCU\Software\Flappy\<gameId>\InstallPath
+            string regPath = GetInstalledPathFromRegistry(g.Id);
+            if (!string.IsNullOrEmpty(regPath))
+            {
+                if (File.Exists(Path.Combine(regPath, ".flappy_installed"))
+                    || File.Exists(Path.Combine(regPath, "ModOrganizer.exe"))
+                    || Directory.Exists(Path.Combine(regPath, "StockGame"))
+                    || (g.IsDoom && File.Exists(Path.Combine(regPath, "zandronum.exe"))))
+                {
+                    return regPath;
+                }
+            }
+
+            // 4. Default legacy path next to exe
+            return Path.Combine(baseDir, g.InstallFolderName);
+        }
+
         public static string InstallRoot
         {
             get
             {
-                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, Current.InstallFolderName);
+                return GetInstallRoot(Current);
             }
         }
 
@@ -199,7 +299,11 @@ namespace FlappyReDovahLauncher
         {
             get
             {
-                return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "local_version_" + Current.Id + ".txt");
+                string inRoot = Path.Combine(InstallRoot, "local_version_" + Current.Id + ".txt");
+                if (File.Exists(inRoot)) return inRoot;
+                string inBase = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "local_version_" + Current.Id + ".txt");
+                if (File.Exists(inBase)) return inBase;
+                return inRoot;
             }
         }
 

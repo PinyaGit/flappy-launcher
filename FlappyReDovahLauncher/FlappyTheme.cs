@@ -13,6 +13,7 @@ namespace FlappyReDovahLauncher
         public static readonly Color Gold = Color.FromArgb(214, 186, 110);
         public static readonly Color GoldHi = Color.FromArgb(236, 214, 150);
         public static readonly Color Cream = Color.FromArgb(236, 228, 210);
+        public static readonly Color TextLight = Cream;
         public static readonly Color Mute = Color.FromArgb(160, 148, 168);
         public static readonly Color CancelBack = Color.FromArgb(40, 34, 48);
 
@@ -36,7 +37,7 @@ namespace FlappyReDovahLauncher
                 FlatStyle = FlatStyle.Flat,
                 BackColor = primary ? PanelActive : Panel,
                 ForeColor = primary ? GoldHi : Cream,
-                Font = new Font("Segoe UI Semibold", primary ? 11f : 10f, FontStyle.Bold),
+                Font = new Font("Segoe UI Semibold", primary ? 10f : 9.5f, FontStyle.Bold),
                 Location = loc,
                 Size = size,
                 Cursor = Cursors.Hand,

@@ -14,6 +14,7 @@ namespace FlappyReDovahLauncher
         [STAThread]
         static void Main(string[] args)
         {
+            System.Windows.Forms.Application.SetHighDpiMode(HighDpiMode.DpiUnawareGdiScaled);
             System.Windows.Forms.Application.EnableVisualStyles();
             System.Windows.Forms.Application.SetCompatibleTextRenderingDefault(false);
             System.Windows.Forms.Application.ThreadException += Application_ThreadException;
@@ -56,6 +57,19 @@ namespace FlappyReDovahLauncher
                 LauncherLog.Error("Self-update entry", ex);
                 // continue to normal launch
             }
+
+            // If running inside a game folder with a stamped game id, select that game immediately.
+            try
+            {
+                string idFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, ".flappy_game_id");
+                if (File.Exists(idFile))
+                {
+                    string gid = File.ReadAllText(idFile).Trim();
+                    if (!string.IsNullOrEmpty(gid))
+                        GameCatalog.Select(gid);
+                }
+            }
+            catch { }
 
             System.Windows.Forms.Application.Run(new Application());
         }
